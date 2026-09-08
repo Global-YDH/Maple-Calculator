@@ -141,8 +141,6 @@
       };
 
       const [apiKey, setApiKey] = useState(() => localStorage.getItem('nexon_api_key') || '');
-      const [showKeyModal, setShowKeyModal] = useState(false);
-      const [tempKey, setTempKey] = useState('');
 
       const [syncId, setSyncId] = useState(() => localStorage.getItem('maple_sync_id') || '');
       const [syncPassword, setSyncPassword] = useState(() => localStorage.getItem('maple_sync_pw') || '');
@@ -150,6 +148,7 @@
       const [syncMode, setSyncMode] = useState('register');
       const [tempSyncId, setTempSyncId] = useState('');
       const [tempSyncPassword, setTempSyncPassword] = useState('');
+      const [tempSyncApiKey, setTempSyncApiKey] = useState('');
       const [syncStatus, setSyncStatus] = useState('로컬 모드 (저장됨)');
 
       const supabaseRef = useRef(null);
@@ -196,7 +195,7 @@
       const [dropTaxRate, setDropTaxRate] = useState(isMvpOrPc ? 3 : 5);
       const [dropPartyCount, setDropPartyCount] = useState(1);
 
-      const handleRegisterAccount = async (targetId, targetPw) => {
+      const handleRegisterAccount = async (targetId, targetPw, optApiKey) => {
         if (!supabaseRef.current || !targetId || !targetPw) return false;
         setSyncStatus('계정 생성 중...');
         try {
@@ -215,6 +214,7 @@
           const payload = {
             characters,
             isMvpOrPc,
+            apiKey: optApiKey || apiKey || '',
             updatedAt: new Date().toISOString()
           };
           const { error: insertError } = await supabaseRef.current
@@ -222,6 +222,11 @@
             .insert({ id: targetId, password: targetPw, data: payload });
 
           if (insertError) throw insertError;
+
+          if (optApiKey) {
+            localStorage.setItem('nexon_api_key', optApiKey);
+            setApiKey(optApiKey);
+          }
 
           setSyncStatus('클라우드 연동됨');
           return true;
@@ -263,6 +268,10 @@
               setIsMvpOrPc(parsed.isMvpOrPc);
               setDropTaxRate(parsed.isMvpOrPc ? 3 : 5);
             }
+            if (parsed.apiKey) {
+              localStorage.setItem('nexon_api_key', parsed.apiKey);
+              setApiKey(parsed.apiKey);
+            }
           }
 
           setSyncStatus('클라우드 연동됨');
@@ -297,6 +306,7 @@
             const payload = {
               characters,
               isMvpOrPc,
+              apiKey,
               updatedAt: new Date().toISOString()
             };
             const { error } = await supabaseRef.current
@@ -312,7 +322,7 @@
         }, 1000);
 
         return () => clearTimeout(timer);
-      }, [characters, isMvpOrPc]);
+      }, [characters, isMvpOrPc, apiKey]);
 
       const toggleMvpBenefit = (checked) => {
         setIsMvpOrPc(checked);
@@ -332,7 +342,6 @@
           setCharacters([]);
           setActiveCharId('');
           setApiKey('');
-          setTempKey('');
           setSyncId('');
           setSyncPassword('');
           alert('모든 데이터가 초기화되었습니다.');
@@ -379,7 +388,11 @@
       const handleApiAdd = async (e) => {
         e.preventDefault();
         if (!apiKey) {
-          setShowKeyModal(true);
+          setSyncMode('register');
+          setTempSyncId(syncId || '');
+          setTempSyncPassword(syncPassword || '');
+          setShowSyncModal(true);
+          alert('먼저 클라우드 계정 연동 창에서 넥슨 API 키를 등록하거나 연동해주세요!');
           return;
         }
         if (!searchName.trim()) return;
@@ -931,19 +944,10 @@
                   <span>{isDark ? '🌙 다크' : '☀️ 라이트'}</span>
                 </button>
                 <button
-                  onClick={() => { setTempKey(apiKey); setShowKeyModal(true); }}
-                  class={`text-xs px-3 py-1.5 border rounded-xl font-semibold transition-colors ${
-                    isDark
-                      ? (apiKey ? 'bg-slate-800 border-slate-700 text-slate-300 hover:text-slate-100' : 'bg-amber-950/60 border-amber-800/80 text-amber-300')
-                      : (apiKey ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100' : 'bg-amber-50 border-amber-300 text-amber-800')
-                  }`}
-                >
-                  {apiKey ? 'API Key 관리' : '🔑 Key 등록'}
-                </button>
-                <button
                   onClick={() => {
                     setTempSyncId(syncId || '');
                     setTempSyncPassword('');
+                    setTempSyncApiKey(apiKey || '');
                     setSyncMode(syncId ? 'login' : 'register');
                     setShowSyncModal(true);
                   }}
@@ -953,7 +957,7 @@
                       : (syncId ? 'bg-white border-slate-300 text-emerald-700 hover:bg-slate-100' : 'bg-sky-50 border-sky-300 text-sky-800')
                   }`}
                 >
-                  {syncId ? `☁️ 연동됨 (${syncId})` : '☁️ 계정 연동 및 백업'}
+                  {syncId ? `☁️ 연동됨 (${syncId})` : '☁️ 계정 연동 및 API 등록'}
                 </button>
                 <button
                   type="button"
@@ -970,7 +974,7 @@
               </div>
             </div>
 
-            {/* 메인 2단 그리드 레이아웃 (원래의 컴팩트한 비율 복원) */}
+            {/* 메인 2단 그리드 레이아웃 */}
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
               {/* 좌측 패널: 캐릭터 관리 및 세로 목록 */}
@@ -1008,7 +1012,7 @@
                       <div class="flex gap-2">
                         <input
                           type="text"
-                          placeholder={apiKey ? "캐릭터 닉네임 입력" : "API Key 등록 후 조회"}
+                          placeholder={apiKey ? "캐릭터 닉네임 입력" : "계정 연동에서 API Key 등록 필요"}
                           value={searchName}
                           onChange={e => setSearchName(e.target.value)}
                           disabled={isSearching}
@@ -1064,7 +1068,7 @@
                   {formError && <p class="text-[11px] text-rose-500 mt-1.5 px-1">{formError}</p>}
                 </div>
 
-                {/* 캐릭터 목록 영역 (원래의 비율에 캐릭터 이름만 text-sm으로 깔끔하게 키움) */}
+                {/* 캐릭터 목록 영역 */}
                 {characters.length > 0 && (
                   <div class={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
                     <div class="text-xs font-extrabold mb-3 flex items-center justify-between">
@@ -1635,13 +1639,13 @@
               </div>
             </div>
 
-            {/* API Key 모달 */}
-            {showKeyModal && (
+            {/* 계정 연동 및 백업 모달 (API Key 발급 방법 링크 포함) */}
+            {showSyncModal && (
               <div class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-                <div class={`border rounded-2xl p-5 max-w-xs w-full shadow-2xl ${themeCard}`}>
-                  <h3 class={`text-sm font-bold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>넥슨 오픈 API Key 설정</h3>
+                <div class={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl ${themeCard}`}>
+                  <h3 class={`text-sm font-bold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>클라우드 계정 연동 및 API 등록</h3>
                   <p class={`text-[11px] mb-3 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    키는 브라우저 내부(localStorage)에만 보관됩니다.<br/>
+                    계정과 넥슨 API 키를 클라우드에 함께 동기화하세요.<br/>
                     <a
                       href="https://openapi.nexon.com/"
                       target="_blank"
@@ -1650,45 +1654,6 @@
                     >
                       🔗 넥슨 오픈 API 포털에서 키 발급받기
                     </a>
-                  </p>
-                  <input
-                    type="password"
-                    placeholder="test_... 또는 live_..."
-                    value={tempKey}
-                    onChange={e => setTempKey(e.target.value)}
-                    class={`w-full border rounded-xl px-3 py-2 text-xs mb-4 focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
-                  />
-                  <div class="flex gap-2">
-                    <button
-                      onClick={() => setShowKeyModal(false)}
-                      class={`flex-1 py-2 rounded-xl text-xs font-medium ${
-                        isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-700'
-                      }`}
-                    >
-                      취소
-                    </button>
-                    <button
-                      onClick={() => {
-                        localStorage.setItem('nexon_api_key', tempKey.trim());
-                        setApiKey(tempKey.trim());
-                        setShowKeyModal(false);
-                      }}
-                      class="flex-1 bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-xl text-xs font-bold"
-                    >
-                      저장하기
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* 계정 연동 및 백업 모달 */}
-            {showSyncModal && (
-              <div class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-                <div class={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl ${themeCard}`}>
-                  <h3 class={`text-sm font-bold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>클라우드 계정 연동</h3>
-                  <p class={`text-[11px] mb-3 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    기기 간 데이터 연동을 위한 계정 관리 메뉴입니다.
                   </p>
 
                   <div class={`grid grid-cols-3 gap-1 p-1 rounded-xl border mb-3 ${themeInnerBox}`}>
@@ -1752,6 +1717,21 @@
                         } ${themeInnerInput}`}
                       />
                     </div>
+
+                    {syncMode !== 'delete' && (
+                      <div>
+                        <label class={`block text-[10px] font-bold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                          넥슨 오픈 API Key <span class="text-sky-500 font-normal">(선택사항)</span>
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="test_... 또는 live_... (선택 입력)"
+                          value={tempSyncApiKey}
+                          onChange={e => setTempSyncApiKey(e.target.value)}
+                          class={`w-full border rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {syncMode === 'delete' && (
@@ -1797,6 +1777,7 @@
                       onClick={async () => {
                         const idVal = tempSyncId.trim();
                         const pwVal = tempSyncPassword.trim();
+                        const apiKeyVal = tempSyncApiKey.trim();
                         if (!idVal || !pwVal) {
                           alert('동기화 ID와 비밀번호를 모두 입력해주세요!');
                           return;
@@ -1853,7 +1834,7 @@
 
                         let success = false;
                         if (syncMode === 'register') {
-                          success = await handleRegisterAccount(idVal, pwVal);
+                          success = await handleRegisterAccount(idVal, pwVal, apiKeyVal);
                         } else {
                           success = await handleLoginAccount(idVal, pwVal);
                         }
@@ -1863,8 +1844,9 @@
                           localStorage.setItem('maple_sync_pw', pwVal);
                           setSyncId(idVal);
                           setSyncPassword(pwVal);
+                          setTempSyncApiKey('');
                           setShowSyncModal(false);
-                          alert(syncMode === 'register' ? '계정이 성공적으로 생성되고 연동되었습니다!' : '기존 계정 데이터를 성공적으로 불러왔습니다!');
+                          alert(syncMode === 'register' ? '계정이 성공적으로 생성되고 연동되었습니다!' : '기존 계정 데이터와 API 키를 성공적으로 불러왔습니다!');
                         }
                       }}
                       class={`flex-1 py-2 rounded-xl text-xs font-bold text-white transition-colors ${
