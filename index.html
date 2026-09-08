@@ -1,0 +1,1494 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>메이플 보스 수익 계산기</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 & Babel CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    function formatMeso(meso) {
+      if (!meso) return '0 메소';
+      const jo = Math.floor(meso / 1000000000000);
+      const eok = Math.floor((meso % 1000000000000) / 100000000);
+      const man = Math.floor((meso % 100000000) / 10000);
+      const won = Math.floor(meso % 10000);
+
+      const parts = [];
+      if (jo > 0) parts.push(`${jo.toLocaleString()}조`);
+      if (eok > 0) parts.push(`${eok.toLocaleString()}억`);
+      if (man > 0) parts.push(`${man.toLocaleString()}만`);
+      if (won > 0 && jo === 0 && eok === 0) parts.push(`${won.toLocaleString()}`);
+      return parts.length > 0 ? parts.join(' ') + ' 메소' : `${meso.toLocaleString()} 메소`;
+    }
+
+    function parseCSV(text) {
+      const cleanText = text.replace(/^\uFEFF/, '').trim();
+      const lines = cleanText.split(/\r?\n/);
+      if (lines.length < 2) return [];
+
+      const rawHeaders = lines[0].split(',').map(h => h.trim().replace(/^["']|["']$/g, '').toLowerCase());
+
+      return lines.slice(1).map(line => {
+        if (!line.trim()) return null;
+
+        const result = [];
+        let current = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            inQuotes = !inQuotes;
+          } else if (char === ',' && !inQuotes) {
+            result.push(current.trim().replace(/^["']|["']$/g, ''));
+            current = '';
+          } else {
+            current += char;
+          }
+        }
+        result.push(current.trim().replace(/^["']|["']$/g, ''));
+
+        const obj = {};
+        rawHeaders.forEach((h, i) => {
+          if (h) obj[h] = result[i] !== undefined ? result[i] : '';
+        });
+
+        const rawPrice = String(obj.price || '0').replace(/[^0-9]/g, '');
+
+        return {
+          id: obj.id,
+          name: obj.name,
+          difficulty: obj.difficulty,
+          cycle: (obj.cycle || 'weekly').trim().toLowerCase(),
+          price: parseInt(rawPrice, 10) || 0
+        };
+      }).filter(item => item && item.id && item.price > 0);
+    }
+
+    function BossImage({ name, isDark }) {
+      const [imgFailed, setImgFailed] = useState(false);
+
+      if (imgFailed) {
+        return (
+          <div class={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 border ${
+            isDark ? 'bg-slate-800 text-sky-400 border-slate-700' : 'bg-sky-100 text-sky-700 border-sky-200'
+          }`}>
+            {name.slice(0, 1)}
+          </div>
+        );
+      }
+
+      return (
+        <img
+          src={`./images/${encodeURIComponent(name)}.png`}
+          alt=""
+          onError={() => setImgFailed(true)}
+          class="w-10 h-10 rounded-xl object-contain bg-slate-900/40 border border-slate-700/60 shrink-0 shadow-sm"
+        />
+      );
+    }
+
+    function App() {
+      const [theme, setTheme] = useState(() => localStorage.getItem('maple_theme') || 'dark');
+      const isDark = theme === 'dark';
+
+      const toggleTheme = () => {
+        const next = isDark ? 'light' : 'dark';
+        setTheme(next);
+        localStorage.setItem('maple_theme', next);
+      };
+
+      const [apiKey, setApiKey] = useState(() => localStorage.getItem('nexon_api_key') || '');
+      const [showKeyModal, setShowKeyModal] = useState(false);
+      const [tempKey, setTempKey] = useState('');
+
+      const [mainTab, setMainTab] = useState('daily');
+      const [incomePeriod, setIncomePeriod] = useState('weekly');
+
+      const [isMvpOrPc, setIsMvpOrPc] = useState(() => {
+        const saved = localStorage.getItem('maple_is_mvp');
+        return saved !== null ? JSON.parse(saved) : true;
+      });
+
+      const [bossList, setBossList] = useState([]);
+      const [loadingBosses, setLoadingBosses] = useState(true);
+      const [loadError, setLoadError] = useState(false);
+
+      const [characters, setCharacters] = useState(() => {
+        const saved = localStorage.getItem('maple_characters_v2');
+        return saved ? JSON.parse(saved) : [];
+      });
+      const [activeCharId, setActiveCharId] = useState('');
+
+      const [addMode, setAddMode] = useState('api');
+      const [searchName, setSearchName] = useState('');
+      const [manualName, setManualName] = useState('');
+      const [manualJob, setManualJob] = useState('');
+      const [manualLevel, setManualLevel] = useState('');
+      const [isSearching, setIsSearching] = useState(false);
+      const [formError, setFormError] = useState('');
+
+      const [dropItemName, setDropItemName] = useState('');
+      const [dropItemPriceRaw, setDropItemPriceRaw] = useState('');
+      const [dropTaxRate, setDropTaxRate] = useState(isMvpOrPc ? 3 : 5);
+      const [dropPartyCount, setDropPartyCount] = useState(1);
+
+      const toggleMvpBenefit = (checked) => {
+        setIsMvpOrPc(checked);
+        localStorage.setItem('maple_is_mvp', JSON.stringify(checked));
+        setDropTaxRate(checked ? 3 : 5);
+      };
+
+      const addQuickAmount = (amount) => {
+        const current = parseInt(dropItemPriceRaw || '0', 10);
+        const next = Math.max(0, current + amount);
+        setDropItemPriceRaw(next > 0 ? String(next) : '');
+      };
+
+      useEffect(() => {
+        async function fetchCSV() {
+          try {
+            const res = await fetch(`./bosses.csv?v=${Date.now()}`, { cache: 'no-store' });
+            if (!res.ok) throw new Error('파일을 찾을 수 없습니다.');
+
+            const text = await res.text();
+            const parsed = parseCSV(text);
+
+            if (parsed.length > 0) {
+              setBossList(parsed);
+              localStorage.setItem('cached_csv_bosses_v4', JSON.stringify(parsed));
+            } else {
+              throw new Error('데이터 파싱 실패');
+            }
+          } catch (e) {
+            console.warn('CSV 로드 실패, 캐시 확인:', e);
+            const cached = localStorage.getItem('cached_csv_bosses_v4');
+            if (cached) {
+              setBossList(JSON.parse(cached));
+            } else {
+              setLoadError(true);
+            }
+          } finally {
+            setLoadingBosses(false);
+          }
+        }
+        fetchCSV();
+      }, []);
+
+      useEffect(() => {
+        localStorage.setItem('maple_characters_v2', JSON.stringify(characters));
+        if (characters.length > 0 && !characters.some(c => c.id === activeCharId)) {
+          setActiveCharId(characters[0].id);
+        }
+      }, [characters, activeCharId]);
+
+      const handleApiAdd = async (e) => {
+        e.preventDefault();
+        if (!apiKey) {
+          setShowKeyModal(true);
+          return;
+        }
+        if (!searchName.trim()) return;
+
+        setIsSearching(true);
+        setFormError('');
+
+        try {
+          const idRes = await fetch(
+            `https://open.api.nexon.com/maplestory/v1/id?character_name=${encodeURIComponent(searchName.trim())}`,
+            { headers: { 'x-nxopen-api-key': apiKey } }
+          );
+
+          if (!idRes.ok) {
+            if (idRes.status === 401 || idRes.status === 403) throw new Error('API Key가 유효하지 않습니다.');
+            throw new Error('캐릭터를 찾을 수 없습니다.');
+          }
+
+          const { ocid } = await idRes.json();
+
+          const basicRes = await fetch(
+            `https://open.api.nexon.com/maplestory/v1/character/basic?ocid=${ocid}`,
+            { headers: { 'x-nxopen-api-key': apiKey } }
+          );
+
+          if (!basicRes.ok) throw new Error('캐릭터 정보 조회 실패');
+          const info = await basicRes.json();
+
+          if (characters.some(c => c.id === ocid || c.name === info.character_name)) {
+            throw new Error('이미 등록된 캐릭터입니다.');
+          }
+
+          const newChar = {
+            id: ocid,
+            name: info.character_name,
+            job: info.character_class,
+            level: info.character_level,
+            image: info.character_image,
+            clears: {},
+            drops: []
+          };
+
+          setCharacters(prev => [...prev, newChar]);
+          setActiveCharId(ocid);
+          setSearchName('');
+        } catch (err) {
+          setFormError(err.message || '오류가 발생했습니다.');
+        } finally {
+          setIsSearching(false);
+        }
+      };
+
+      const handleManualAdd = (e) => {
+        e.preventDefault();
+        const trimmedName = manualName.trim();
+        if (!trimmedName) {
+          setFormError('캐릭터 닉네임을 입력해주세요.');
+          return;
+        }
+
+        if (characters.some(c => c.name === trimmedName)) {
+          setFormError('이미 동일한 닉네임의 캐릭터가 있습니다.');
+          return;
+        }
+
+        const newId = 'custom_' + Date.now();
+        const newChar = {
+          id: newId,
+          name: trimmedName,
+          job: manualJob.trim() || '모험가',
+          level: parseInt(manualLevel, 10) || 260,
+          image: null,
+          clears: {},
+          drops: []
+        };
+
+        setCharacters(prev => [...prev, newChar]);
+        setActiveCharId(newId);
+        setManualName('');
+        setManualJob('');
+        setManualLevel('');
+        setFormError('');
+      };
+
+      // ★ 캐릭터 삭제 컨펌 추가
+      const deleteCharacter = (id) => {
+        const target = characters.find(c => c.id === id);
+        const charName = target ? target.name : '이 캐릭터';
+        if (confirm(`정말 [${charName}] 캐릭터를 삭제하시겠습니까?\n등록된 모든 보스 체크 내역과 득템 내역이 영구히 삭제됩니다.`)) {
+          setCharacters(prev => prev.filter(c => c.id !== id));
+        }
+      };
+
+      // ★ 보스 선택 초기화 컨펌
+      const resetBossClears = () => {
+        if (!activeChar) return;
+        if (confirm(`[${activeChar.name}] 캐릭터의 모든 보스 선택을 초기화하시겠습니까?\n(득템 내역은 유지됩니다)`)) {
+          setCharacters(prev => prev.map(c => {
+            if (c.id !== activeCharId) return c;
+            return { ...c, clears: {} };
+          }));
+        }
+      };
+
+      const selectBossDifficulty = (bossItem, diffVariantIds) => {
+        if (!activeCharId) return;
+
+        setCharacters(prev => prev.map(char => {
+          if (char.id !== activeCharId) return char;
+          const nextClears = { ...char.clears };
+          const isCurrentlySelected = Boolean(nextClears[bossItem.id]);
+
+          diffVariantIds.forEach(id => {
+            delete nextClears[id];
+          });
+
+          if (!isCurrentlySelected) {
+            nextClears[bossItem.id] = 1;
+          }
+
+          return { ...char, clears: nextClears };
+        }));
+      };
+
+      const setBossPartySize = (bossId, size) => {
+        setCharacters(prev => prev.map(char => {
+          if (char.id !== activeCharId) return char;
+          return {
+            ...char,
+            clears: { ...char.clears, [bossId]: Math.max(1, Math.min(6, size)) }
+          };
+        }));
+      };
+
+      const handleAddDrop = (e) => {
+        e.preventDefault();
+        if (!dropItemName.trim() || !dropItemPriceRaw) return;
+
+        const originalPrice = parseInt(dropItemPriceRaw, 10) || 0;
+        if (originalPrice <= 0) return;
+
+        const afterFee = originalPrice * ((100 - dropTaxRate) / 100);
+        const finalShare = Math.floor(afterFee / dropPartyCount);
+
+        const newItem = {
+          id: 'drop_' + Date.now(),
+          name: dropItemName.trim(),
+          originalPrice: originalPrice,
+          taxRate: dropTaxRate,
+          partyCount: dropPartyCount,
+          price: finalShare
+        };
+
+        if (characters.length === 0) {
+          const defaultChar = {
+            id: 'custom_default',
+            name: '내 캐릭터',
+            job: '모험가',
+            level: 260,
+            image: null,
+            clears: {},
+            drops: [newItem]
+          };
+          setCharacters([defaultChar]);
+          setActiveCharId('custom_default');
+        } else {
+          setCharacters(prev => prev.map(char => {
+            if (char.id !== activeCharId) return char;
+            return {
+              ...char,
+              drops: [...(char.drops || []), newItem]
+            };
+          }));
+        }
+
+        setDropItemName('');
+        setDropItemPriceRaw('');
+      };
+
+      const handleDeleteDrop = (dropId) => {
+        setCharacters(prev => prev.map(char => {
+          if (char.id !== activeCharId) return char;
+          return {
+            ...char,
+            drops: (char.drops || []).filter(d => d.id !== dropId)
+          };
+        }));
+      };
+
+      const calculation = useMemo(() => {
+        const bossMap = Object.fromEntries(bossList.map(b => [b.id, b]));
+        const candidateWeeklyCrystals = [];
+        let dailyCrystalSumPerDay = 0;
+        let monthlyBossCrystalSum = 0;
+        let totalDropMesoWeekly = 0;
+
+        characters.forEach(char => {
+          const charWeekly = [];
+
+          Object.entries(char.clears || {}).forEach(([bId, partySize]) => {
+            const boss = bossMap[bId];
+            if (!boss) return;
+
+            const unitPrice = Math.floor(boss.price / partySize);
+
+            if (boss.cycle === 'daily') {
+              dailyCrystalSumPerDay += unitPrice;
+            } else if (boss.cycle === 'monthly') {
+              monthlyBossCrystalSum += unitPrice;
+            } else {
+              charWeekly.push({
+                charId: char.id,
+                bossId: boss.id,
+                price: unitPrice,
+                cycle: 'weekly'
+              });
+            }
+          });
+
+          charWeekly.sort((a, b) => b.price - a.price);
+          candidateWeeklyCrystals.push(...charWeekly.slice(0, 12));
+
+          (char.drops || []).forEach(d => {
+            totalDropMesoWeekly += d.price;
+          });
+        });
+
+        candidateWeeklyCrystals.sort((a, b) => b.price - a.price);
+        const soldWeeklyCrystals = candidateWeeklyCrystals.slice(0, 90);
+        const weeklyBossCrystalMeso = soldWeeklyCrystals.reduce((sum, item) => sum + item.price, 0);
+
+        const totalDailyWeekly = dailyCrystalSumPerDay * 7;
+        const totalCrystalWeekly = totalDailyWeekly + weeklyBossCrystalMeso + monthlyBossCrystalSum;
+        const grandTotalWeekly = totalCrystalWeekly + totalDropMesoWeekly;
+
+        const totalDailyMonthly = dailyCrystalSumPerDay * 30;
+        const totalWeeklyMonthly = weeklyBossCrystalMeso * 4;
+        const totalCrystalMonthly = totalDailyMonthly + totalWeeklyMonthly + monthlyBossCrystalSum;
+        const totalDropMesoMonthly = totalDropMesoWeekly * 4;
+        const grandTotalMonthly = totalCrystalMonthly + totalDropMesoMonthly;
+
+        return {
+          weekly: {
+            crystalMeso: totalCrystalWeekly,
+            dropMeso: totalDropMesoWeekly,
+            grandTotal: grandTotalWeekly,
+            soldCount: soldWeeklyCrystals.length,
+            dailyPerDay: dailyCrystalSumPerDay
+          },
+          monthly: {
+            crystalMeso: totalCrystalMonthly,
+            dropMeso: totalDropMesoMonthly,
+            grandTotal: grandTotalMonthly,
+            soldCount: soldWeeklyCrystals.length,
+            dailyPerDay: dailyCrystalSumPerDay
+          }
+        };
+      }, [characters, bossList]);
+
+      const currentCalc = incomePeriod === 'weekly' ? calculation.weekly : calculation.monthly;
+
+      const activeChar = characters.find(c => c.id === activeCharId);
+      const bossMap = useMemo(() => Object.fromEntries(bossList.map(b => [b.id, b])), [bossList]);
+
+      const activeCharDailyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'daily').length;
+      const activeCharWeeklyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'weekly').length;
+      const activeCharMonthlyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'monthly').length;
+
+      const activeCharDrops = activeChar?.drops || [];
+      const activeCharDropTotal = activeCharDrops.reduce((sum, d) => sum + d.price, 0);
+
+      const currentInputPrice = parseInt(dropItemPriceRaw || '0', 10);
+      const previewMyShare = currentInputPrice > 0
+        ? Math.floor((currentInputPrice * ((100 - dropTaxRate) / 100)) / dropPartyCount)
+        : 0;
+
+      const { dailyMultiBosses, dailySingleBosses, weeklyMultiBosses, weeklySingleBosses, monthlyBosses } = useMemo(() => {
+        const diffOrder = { '이지': 1, '노말': 2, '하드': 3, '카오스': 4, '익스트림': 5 };
+
+        const groupByCycleStrictOrder = (targetCycle) => {
+          const map = new Map();
+          bossList
+            .filter(b => b.cycle === targetCycle)
+            .forEach(b => {
+              if (!map.has(b.name)) {
+                map.set(b.name, { name: b.name, cycle: b.cycle, variants: [] });
+              }
+              map.get(b.name).variants.push(b);
+            });
+
+          const list = Array.from(map.values());
+          list.forEach(boss => {
+            boss.variants.sort((a, b) => (diffOrder[a.difficulty] || 9) - (diffOrder[b.difficulty] || 9));
+          });
+
+          return list;
+        };
+
+        const dailyList = groupByCycleStrictOrder('daily');
+        const weeklyList = groupByCycleStrictOrder('weekly');
+        const monthlyList = groupByCycleStrictOrder('monthly');
+
+        return {
+          dailyMultiBosses: dailyList.filter(b => b.variants.length > 1),
+          dailySingleBosses: dailyList.filter(b => b.variants.length === 1),
+          weeklyMultiBosses: weeklyList.filter(b => b.variants.length > 1),
+          weeklySingleBosses: weeklyList.filter(b => b.variants.length === 1),
+          monthlyBosses: monthlyList
+        };
+      }, [bossList]);
+
+      const themeContainer = isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
+      const themeCard = isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
+      const themeCardSub = isDark ? 'bg-slate-900/60 border-slate-800/80' : 'bg-white/80 border-slate-200 shadow-sm';
+      const themeInnerInput = isDark ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500' : 'bg-slate-100 border-slate-300 text-slate-900 placeholder-slate-400';
+      const themeInnerBox = isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200';
+
+      const getBadgeColor = (diff, isSelected) => {
+        if (isSelected) {
+          if (diff === '익스트림') return 'bg-purple-600 text-white border-purple-500 font-bold shadow';
+          if (diff === '하드') return 'bg-rose-600 text-white border-rose-500 font-bold shadow';
+          if (diff === '카오스') return 'bg-amber-600 text-white border-amber-500 font-bold shadow';
+          if (diff === '노말') return 'bg-sky-600 text-white border-sky-500 font-bold shadow';
+          return 'bg-emerald-600 text-white border-emerald-500 font-bold';
+        } else {
+          if (isDark) {
+            if (diff === '익스트림') return 'bg-purple-950/40 text-purple-400 border-purple-900/50 hover:bg-purple-900/40';
+            if (diff === '하드') return 'bg-rose-950/40 text-rose-400 border-rose-900/50 hover:bg-rose-900/40';
+            if (diff === '카오스') return 'bg-amber-950/40 text-amber-400 border-amber-900/50 hover:bg-amber-900/40';
+            if (diff === '노말') return 'bg-sky-950/40 text-sky-400 border-sky-900/50 hover:bg-sky-900/40';
+            return 'bg-slate-900 text-slate-400 border-slate-800 hover:bg-slate-800';
+          } else {
+            if (diff === '익스트림') return 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100';
+            if (diff === '하드') return 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100';
+            if (diff === '카오스') return 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100';
+            if (diff === '노말') return 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100';
+            return 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200';
+          }
+        }
+      };
+
+      const renderBossRow = (bossGroup) => {
+        const variantIds = bossGroup.variants.map(v => v.id);
+        const isSingle = bossGroup.variants.length === 1;
+        const singleVariant = isSingle ? bossGroup.variants[0] : null;
+
+        const selectedVariant = bossGroup.variants.find(v => Boolean(activeChar?.clears?.[v.id]));
+        const isAnySelected = Boolean(selectedVariant);
+        const partySize = selectedVariant ? (activeChar?.clears?.[selectedVariant.id] || 1) : 1;
+        const unitPrice = selectedVariant ? Math.floor(selectedVariant.price / partySize) : 0;
+
+        if (isSingle) {
+          return (
+            <div
+              key={bossGroup.name}
+              onClick={() => activeChar && selectBossDifficulty(singleVariant, variantIds)}
+              class={`px-3.5 py-2.5 rounded-2xl border transition-all flex items-center justify-between select-none ${
+                activeChar ? 'cursor-pointer' : 'cursor-not-allowed'
+              } ${
+                isAnySelected
+                  ? (isDark ? 'bg-slate-900 border-sky-500/80 shadow-md' : 'bg-sky-50/70 border-sky-400 shadow-sm')
+                  : (isDark ? 'bg-slate-900/50 border-slate-800/80 hover:bg-slate-900/70' : 'bg-white border-slate-200 hover:bg-slate-50')
+              }`}
+            >
+              <div class="flex items-center gap-3">
+                <BossImage name={bossGroup.name} isDark={isDark} />
+                <div>
+                  <div class="flex items-center gap-1.5">
+                    <span class={`text-[10px] px-1.5 py-0.5 rounded-lg border font-bold ${getBadgeColor(singleVariant.difficulty, isAnySelected)}`}>
+                      {singleVariant.difficulty}
+                    </span>
+                    <span class={`text-sm font-extrabold ${
+                      isAnySelected
+                        ? (isDark ? 'text-white' : 'text-sky-950')
+                        : (isDark ? 'text-slate-200' : 'text-slate-800')
+                    }`}>
+                      {bossGroup.name}
+                    </span>
+                  </div>
+                  <div class={`text-xs mt-0.5 ${
+                    isAnySelected
+                      ? 'text-sky-500 font-bold'
+                      : (isDark ? 'text-slate-400' : 'text-slate-500')
+                  }`}>
+                    {formatMeso(unitPrice || singleVariant.price)}
+                  </div>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2">
+                {isAnySelected && (
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    class={`flex items-center gap-1.5 px-2 py-1 rounded-xl border ${themeInnerBox}`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setBossPartySize(singleVariant.id, partySize - 1)}
+                      class={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
+                        isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      -
+                    </button>
+                    <span class="text-xs px-1 text-sky-500 font-bold">{partySize}인</span>
+                    <button
+                      type="button"
+                      onClick={() => setBossPartySize(singleVariant.id, partySize + 1)}
+                      class={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
+                        isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      +
+                    </button>
+                  </div>
+                )}
+
+                <div class={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-black ${
+                  isAnySelected
+                    ? 'bg-sky-500 text-slate-950 shadow-sm'
+                    : (isDark ? 'border border-slate-700' : 'border border-slate-300')
+                }`}>
+                  {isAnySelected && '✓'}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div
+            key={bossGroup.name}
+            class={`px-3.5 py-2.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
+              isAnySelected
+                ? (bossGroup.cycle === 'monthly'
+                    ? (isDark ? 'bg-slate-900 border-purple-500/80 shadow-md' : 'bg-purple-50/70 border-purple-400 shadow-sm')
+                    : bossGroup.cycle === 'daily'
+                    ? (isDark ? 'bg-slate-900 border-emerald-500/80 shadow-md' : 'bg-emerald-50/70 border-emerald-400 shadow-sm')
+                    : (isDark ? 'bg-slate-900 border-sky-500/80 shadow-md' : 'bg-sky-50/70 border-sky-400 shadow-sm'))
+                : (isDark ? 'bg-slate-900/50 border-slate-800/80' : 'bg-white border-slate-200')
+            }`}
+          >
+            <div class="flex items-center gap-3 min-w-[120px]">
+              <BossImage name={bossGroup.name} isDark={isDark} />
+              <div>
+                <div class={`text-sm font-extrabold leading-snug ${
+                  isAnySelected
+                    ? (isDark ? 'text-white' : 'text-sky-950')
+                    : (isDark ? 'text-slate-200' : 'text-slate-800')
+                }`}>
+                  {bossGroup.name}
+                </div>
+                {isAnySelected ? (
+                  <div class={`text-xs font-bold mt-0.5 ${
+                    bossGroup.cycle === 'monthly' ? 'text-purple-400' : bossGroup.cycle === 'daily' ? 'text-emerald-400' : 'text-sky-500'
+                  }`}>
+                    {formatMeso(unitPrice)}
+                  </div>
+                ) : (
+                  <div class={`text-[10px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    선택안됨
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 flex-wrap justify-end flex-1">
+              {bossGroup.variants.map(v => {
+                const isSelected = activeChar?.clears?.[v.id];
+
+                return (
+                  <button
+                    key={v.id}
+                    type="button"
+                    disabled={!activeChar}
+                    onClick={() => selectBossDifficulty(v, variantIds)}
+                    class={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 ${getBadgeColor(v.difficulty, isSelected)} ${
+                      !activeChar ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    {v.difficulty}
+                  </button>
+                );
+              })}
+
+              {isAnySelected && (
+                <div class={`flex items-center gap-1.5 px-2 py-1 rounded-xl border ml-1 ${themeInnerBox}`}>
+                  <button
+                    type="button"
+                    onClick={() => setBossPartySize(selectedVariant.id, partySize - 1)}
+                    class={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
+                      isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    -
+                  </button>
+                  <span class={`text-xs px-1 font-bold ${
+                    bossGroup.cycle === 'monthly' ? 'text-purple-400' : bossGroup.cycle === 'daily' ? 'text-emerald-400' : 'text-sky-500'
+                  }`}>{partySize}인</span>
+                  <button
+                    type="button"
+                    onClick={() => setBossPartySize(selectedVariant.id, partySize + 1)}
+                    class={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
+                      isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      return (
+        <div class={`min-h-screen pb-24 font-sans transition-colors duration-200 ${themeContainer}`}>
+          <div class="max-w-xl mx-auto px-4 py-5">
+            {/* 상단 헤더 */}
+            <div class="flex items-center justify-between mb-4">
+              <h1 class={`text-lg font-extrabold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                메이플 보스 수익 계산기
+              </h1>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  class={`text-xs px-3 py-1.5 border rounded-xl transition-all flex items-center gap-1 font-semibold ${
+                    isDark
+                      ? 'bg-slate-800 border-slate-700 text-amber-300 hover:bg-slate-700'
+                      : 'bg-white border-slate-300 text-indigo-600 hover:bg-slate-100 shadow-sm'
+                  }`}
+                >
+                  <span>{isDark ? '🌙 다크' : '☀️ 라이트'}</span>
+                </button>
+                <button
+                  onClick={() => { setTempKey(apiKey); setShowKeyModal(true); }}
+                  class={`text-xs px-3 py-1.5 border rounded-xl font-semibold transition-colors ${
+                    isDark
+                      ? (apiKey ? 'bg-slate-800 border-slate-700 text-slate-300 hover:text-slate-100' : 'bg-amber-950/60 border-amber-800/80 text-amber-300')
+                      : (apiKey ? 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100' : 'bg-amber-50 border-amber-300 text-amber-800')
+                  }`}
+                >
+                  {apiKey ? 'API Key 관리' : '🔑 Key 등록'}
+                </button>
+              </div>
+            </div>
+
+            {/* 대시보드 */}
+            <div class={`border rounded-2xl p-5 shadow-lg mb-4 sticky top-2 z-20 backdrop-blur-md transition-colors ${
+              isDark ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200 shadow-md'
+            }`}>
+              <div class="flex items-center justify-between">
+                <div class="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider">
+                  {incomePeriod === 'weekly' ? '주간 총 예상 수익 (일간 7일+주간+월간)' : '월간 예상 수익 (일간 30일+주간 4주+월간)'}
+                </div>
+                <div class={`flex items-center p-0.5 rounded-lg border text-[10px] font-bold ${themeInnerBox}`}>
+                  <button
+                    type="button"
+                    onClick={() => setIncomePeriod('weekly')}
+                    class={`px-2.5 py-0.5 rounded-md transition-all ${
+                      incomePeriod === 'weekly'
+                        ? 'bg-emerald-600 text-white shadow'
+                        : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                    }`}
+                  >
+                    주간
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIncomePeriod('monthly')}
+                    class={`px-2.5 py-0.5 rounded-md transition-all ${
+                      incomePeriod === 'monthly'
+                        ? 'bg-emerald-600 text-white shadow'
+                        : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                    }`}
+                  >
+                    월간
+                  </button>
+                </div>
+              </div>
+
+              <div class={`text-2xl font-black mt-1 tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                {formatMeso(currentCalc.grandTotal)}
+              </div>
+
+              <div class={`grid grid-cols-2 gap-3 mt-3 pt-3 border-t text-xs ${isDark ? 'border-slate-800/80' : 'border-slate-100'}`}>
+                <div>
+                  <span class={`block text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    결정석 합산 {incomePeriod === 'weekly' ? `(주간 ${currentCalc.soldCount}/90개)` : '(월 환산)'}
+                  </span>
+                  <span class="font-bold text-sm text-sky-500">{formatMeso(currentCalc.crystalMeso)}</span>
+                </div>
+                <div>
+                  <span class={`block text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    득템 실 수령액 {incomePeriod === 'monthly' && '(월 4주)'}
+                  </span>
+                  <span class="font-bold text-sm text-amber-500">{formatMeso(currentCalc.dropMeso)}</span>
+                </div>
+              </div>
+
+              <div class={`w-full h-2 rounded-full mt-3 overflow-hidden ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
+                <div
+                  class="bg-sky-500 h-full rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, (currentCalc.soldCount / 90) * 100)}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* 캐릭터 추가 영역 */}
+            <div class={`border rounded-2xl p-3.5 mb-4 transition-colors ${themeCardSub}`}>
+              <div class="flex gap-2 mb-3">
+                <button
+                  type="button"
+                  onClick={() => { setAddMode('api'); setFormError(''); }}
+                  class={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                    addMode === 'api'
+                      ? 'bg-sky-600 text-white shadow'
+                      : (isDark ? 'bg-slate-800/70 text-slate-400' : 'bg-slate-200/80 text-slate-600')
+                  }`}
+                >
+                  API 자동 조회
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setAddMode('manual'); setFormError(''); }}
+                  class={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                    addMode === 'manual'
+                      ? 'bg-sky-600 text-white shadow'
+                      : (isDark ? 'bg-slate-800/70 text-slate-400' : 'bg-slate-200/80 text-slate-600')
+                  }`}
+                >
+                  수동 직접 입력
+                </button>
+              </div>
+
+              {addMode === 'api' ? (
+                <form onSubmit={handleApiAdd}>
+                  <div class="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder={apiKey ? "캐릭터 닉네임 입력" : "API Key 등록 후 조회 가능"}
+                      value={searchName}
+                      onChange={e => setSearchName(e.target.value)}
+                      disabled={isSearching}
+                      class={`border rounded-xl px-3.5 py-2 text-xs flex-1 focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSearching}
+                      class="bg-sky-600 hover:bg-sky-500 disabled:bg-slate-400 px-4 py-2 rounded-xl text-xs font-bold text-white transition-colors"
+                    >
+                      {isSearching ? '...' : '+ 추가'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={handleManualAdd} class="space-y-2">
+                  <div class="grid grid-cols-12 gap-2">
+                    <input
+                      type="text"
+                      placeholder="닉네임"
+                      value={manualName}
+                      onChange={e => setManualName(e.target.value)}
+                      class={`col-span-5 border rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
+                    />
+                    <input
+                      type="text"
+                      placeholder="직업"
+                      value={manualJob}
+                      onChange={e => setManualJob(e.target.value)}
+                      class={`col-span-4 border rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
+                    />
+                    <input
+                      type="number"
+                      placeholder="레벨"
+                      value={manualLevel}
+                      onChange={e => setManualLevel(e.target.value)}
+                      class={`col-span-3 border rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-sky-500 text-center ${themeInnerInput}`}
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    class={`w-full py-2 rounded-xl text-xs font-bold border transition-colors ${
+                      isDark
+                        ? 'bg-slate-800 hover:bg-slate-700 text-sky-400 border-slate-700'
+                        : 'bg-slate-100 hover:bg-slate-200 text-sky-600 border-slate-300'
+                    }`}
+                  >
+                    + 캐릭터 추가
+                  </button>
+                </form>
+              )}
+
+              {formError && <p class="text-[11px] text-rose-500 mt-1.5 px-1">{formError}</p>}
+            </div>
+
+            {/* 캐릭터 탭 목록 */}
+            {characters.length > 0 && (
+              <div class="mb-4">
+                <div class="flex gap-2 overflow-x-auto pb-1.5 no-scrollbar">
+                  {characters.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => setActiveCharId(c.id)}
+                      class={`flex items-center gap-2.5 px-3.5 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all border ${
+                        activeCharId === c.id
+                          ? (isDark ? 'bg-sky-950/80 border-sky-500 text-white shadow-sm' : 'bg-sky-50 border-sky-500 text-sky-900 shadow-sm font-bold')
+                          : (isDark ? 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800/60' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100')
+                      }`}
+                    >
+                      {c.image ? (
+                        <img src={c.image} alt="" class="w-7 h-7 rounded-full bg-slate-800 object-cover" />
+                      ) : (
+                        <div class="w-7 h-7 rounded-full bg-sky-600 border border-sky-400 flex items-center justify-center text-xs text-white font-bold">
+                          {c.name.slice(0, 1)}
+                        </div>
+                      )}
+                      <div class="text-left">
+                        <div class="font-bold text-sm">{c.name}</div>
+                        <div class="text-[11px] opacity-70">Lv.{c.level}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                {/* 캐릭터 정보 바 (안전 삭제 컨펌 적용 및 보스 초기화 버튼 동선 분리) */}
+                {activeChar && (
+                  <div class="flex items-center justify-between mt-2 px-1 text-xs">
+                    <div>
+                      {mainTab === 'daily' && (
+                        <span class={isDark ? 'text-slate-300' : 'text-slate-600'}>
+                          일간 보스 클리어: <strong class="text-emerald-400 font-bold">{activeCharDailyCount}</strong>종 완료
+                        </span>
+                      )}
+                      {mainTab === 'weekly' && (
+                        <span class={isDark ? 'text-slate-300' : 'text-slate-600'}>
+                          주간 보스 클리어: <strong class={activeCharWeeklyCount > 12 ? 'text-rose-500 font-black' : 'text-sky-500 font-bold'}>{activeCharWeeklyCount}</strong> / 12개
+                        </span>
+                      )}
+                      {mainTab === 'monthly' && (
+                        <span class={isDark ? 'text-slate-300' : 'text-slate-600'}>
+                          월간 보스 클리어: <strong class="text-purple-400 font-bold">{activeCharMonthlyCount}</strong> / 1개
+                        </span>
+                      )}
+                      {mainTab === 'drop' && (
+                        <span class={isDark ? 'text-slate-300' : 'text-slate-600'}>
+                          등록된 득템: <strong class="text-amber-500 font-bold">{activeCharDrops.length}</strong>개
+                        </span>
+                      )}
+                    </div>
+                    {/* 캐릭터 삭제 버튼 (실수 방지를 위해 붉은 점선 박스로 격리 및 confirm 적용) */}
+                    <button
+                      type="button"
+                      onClick={() => deleteCharacter(activeChar.id)}
+                      class="text-[11px] text-rose-500 hover:text-rose-400 px-2 py-0.5 border border-dashed border-rose-500/40 rounded-lg transition-colors"
+                    >
+                      캐릭터 삭제
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 4분할 독립 메인 탭 */}
+            <div class={`grid grid-cols-4 gap-1 p-1 rounded-2xl border mb-3 shadow-sm transition-colors ${themeCard}`}>
+              <button
+                type="button"
+                onClick={() => setMainTab('daily')}
+                class={`py-2 text-xs font-bold rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                  mainTab === 'daily'
+                    ? 'bg-emerald-600 text-white shadow'
+                    : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                }`}
+              >
+                <span>☀️</span>
+                <span>일간</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMainTab('weekly')}
+                class={`py-2 text-xs font-bold rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                  mainTab === 'weekly'
+                    ? 'bg-sky-600 text-white shadow'
+                    : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                }`}
+              >
+                <span>📅</span>
+                <span>주간</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMainTab('monthly')}
+                class={`py-2 text-xs font-bold rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                  mainTab === 'monthly'
+                    ? 'bg-purple-600 text-white shadow'
+                    : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                }`}
+              >
+                <span>🌌</span>
+                <span>월간</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMainTab('drop')}
+                class={`py-2 text-xs font-bold rounded-xl transition-all flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                  mainTab === 'drop'
+                    ? 'bg-amber-600 text-white shadow'
+                    : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
+                }`}
+              >
+                <span>✨</span>
+                <span>득템</span>
+              </button>
+            </div>
+
+            {/* ★ 보스 선택 초기화 바 (보스 목록 상단에 편리하고 안전하게 독립 배치) ★ */}
+            {mainTab !== 'drop' && activeChar && (
+              <div class="flex items-center justify-between px-2 mb-2 text-xs">
+                <span class={`text-[11px] font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  [{activeChar.name}] 보스 진행표
+                </span>
+                <button
+                  type="button"
+                  onClick={resetBossClears}
+                  class={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border flex items-center gap-1 transition-all ${
+                    isDark
+                      ? 'bg-slate-900 border-slate-700 text-amber-400 hover:bg-slate-800'
+                      : 'bg-white border-slate-300 text-amber-700 hover:bg-slate-50 shadow-sm'
+                  }`}
+                >
+                  <span>🔄</span>
+                  <span>보스 선택 초기화</span>
+                </button>
+              </div>
+            )}
+
+            {/* ======================= 탭 1: 일간 보스 ======================= */}
+            {mainTab === 'daily' && (
+              <div>
+                {loadingBosses ? (
+                  <div class="text-center py-10 text-sm text-slate-500">bosses.csv 로드 중...</div>
+                ) : loadError ? (
+                  <div class="p-4 bg-rose-950/40 border border-rose-900 rounded-xl text-center text-xs text-rose-400">
+                    <code>bosses.csv</code> 파일을 불러올 수 없습니다.
+                  </div>
+                ) : (
+                  <div class="space-y-4">
+                    <div class="p-3 bg-emerald-950/20 border border-emerald-800/30 rounded-2xl text-xs text-emerald-300 flex items-center justify-between">
+                      <span>💡 매일 1회 클리어 (주간 12개 제한 없음)</span>
+                      {currentCalc.dailyPerDay > 0 && (
+                        <span class="font-bold text-emerald-400">
+                          하루 {formatMeso(currentCalc.dailyPerDay)}
+                        </span>
+                      )}
+                    </div>
+
+                    {dailyMultiBosses.length > 0 && (
+                      <div class="space-y-2">
+                        <div class="text-xs font-extrabold text-emerald-400 px-1 flex items-center gap-1">
+                          <span>⚔️</span>
+                          <span>난이도 선택 일간 보스 ({dailyMultiBosses.length}종)</span>
+                        </div>
+                        {dailyMultiBosses.map(renderBossRow)}
+                      </div>
+                    )}
+
+                    {dailySingleBosses.length > 0 && (
+                      <div>
+                        <div class="text-xs font-extrabold text-slate-400 px-1 mb-2 flex items-center gap-1">
+                          <span>🛡️</span>
+                          <span>단일 난이도 일간 보스 ({dailySingleBosses.length}종)</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2.5">
+                          {dailySingleBosses.map(bossGroup => {
+                            const singleVariant = bossGroup.variants[0];
+                            const variantIds = [singleVariant.id];
+                            const isSelected = Boolean(activeChar?.clears?.[singleVariant.id]);
+                            const partySize = isSelected ? (activeChar?.clears?.[singleVariant.id] || 1) : 1;
+                            const unitPrice = Math.floor(singleVariant.price / partySize);
+
+                            return (
+                              <div
+                                key={bossGroup.name}
+                                onClick={() => activeChar && selectBossDifficulty(singleVariant, variantIds)}
+                                class={`p-3 rounded-2xl border transition-all flex items-center justify-between select-none ${
+                                  activeChar ? 'cursor-pointer' : 'cursor-not-allowed'
+                                } ${
+                                  isSelected
+                                    ? (isDark ? 'bg-slate-900 border-emerald-500/80 shadow-md' : 'bg-emerald-50/70 border-emerald-400 shadow-sm')
+                                    : (isDark ? 'bg-slate-900/50 border-slate-800/80 hover:bg-slate-900/70' : 'bg-white border-slate-200 hover:bg-slate-50')
+                                }`}
+                              >
+                                <div class="flex items-center gap-2.5 truncate">
+                                  <BossImage name={bossGroup.name} isDark={isDark} />
+                                  <div class="truncate">
+                                    <div class="flex items-center gap-1.5">
+                                      <span class={`text-[10px] px-1.5 py-0.5 rounded-lg border font-bold ${getBadgeColor(singleVariant.difficulty, isSelected)}`}>
+                                        {singleVariant.difficulty}
+                                      </span>
+                                      <span class={`text-sm font-extrabold truncate ${
+                                        isSelected
+                                          ? (isDark ? 'text-white' : 'text-emerald-950')
+                                          : (isDark ? 'text-slate-200' : 'text-slate-800')
+                                      }`}>
+                                        {bossGroup.name}
+                                      </span>
+                                    </div>
+                                    <div class={`text-xs mt-1 ${isSelected ? 'text-emerald-400 font-bold' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>
+                                      {formatMeso(unitPrice)}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div class="flex items-center gap-1.5 shrink-0 ml-1">
+                                  <div class={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-black ${
+                                    isSelected
+                                      ? 'bg-emerald-500 text-slate-950 shadow-sm'
+                                      : (isDark ? 'border border-slate-700' : 'border border-slate-300')
+                                  }`}>
+                                    {isSelected && '✓'}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ======================= 탭 2: 주간 보스 ======================= */}
+            {mainTab === 'weekly' && (
+              <div>
+                {loadingBosses ? (
+                  <div class="text-center py-10 text-sm text-slate-500">bosses.csv 로드 중...</div>
+                ) : loadError ? (
+                  <div class="p-4 bg-rose-950/40 border border-rose-900 rounded-xl text-center text-xs text-rose-400">
+                    <code>bosses.csv</code> 파일을 불러올 수 없습니다.
+                  </div>
+                ) : (
+                  <div class="space-y-4">
+                    {weeklyMultiBosses.length > 0 && (
+                      <div class="space-y-2">
+                        <div class="text-xs font-extrabold text-sky-400 px-1 flex items-center gap-1">
+                          <span>⚔️</span>
+                          <span>난이도 선택 보스 ({weeklyMultiBosses.length}종)</span>
+                        </div>
+                        {weeklyMultiBosses.map(renderBossRow)}
+                      </div>
+                    )}
+
+                    {weeklySingleBosses.length > 0 && (
+                      <div>
+                        <div class="text-xs font-extrabold text-slate-400 px-1 mb-2 flex items-center gap-1">
+                          <span>🛡️</span>
+                          <span>단일 난이도 보스 ({weeklySingleBosses.length}종)</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2.5">
+                          {weeklySingleBosses.map(bossGroup => {
+                            const singleVariant = bossGroup.variants[0];
+                            const variantIds = [singleVariant.id];
+                            const isSelected = Boolean(activeChar?.clears?.[singleVariant.id]);
+                            const partySize = isSelected ? (activeChar?.clears?.[singleVariant.id] || 1) : 1;
+                            const unitPrice = Math.floor(singleVariant.price / partySize);
+
+                            return (
+                              <div
+                                key={bossGroup.name}
+                                onClick={() => activeChar && selectBossDifficulty(singleVariant, variantIds)}
+                                class={`p-3 rounded-2xl border transition-all flex items-center justify-between select-none ${
+                                  activeChar ? 'cursor-pointer' : 'cursor-not-allowed'
+                                } ${
+                                  isSelected
+                                    ? (isDark ? 'bg-slate-900 border-sky-500/80 shadow-md' : 'bg-sky-50/70 border-sky-400 shadow-sm')
+                                    : (isDark ? 'bg-slate-900/50 border-slate-800/80 hover:bg-slate-900/70' : 'bg-white border-slate-200 hover:bg-slate-50')
+                                }`}
+                              >
+                                <div class="flex items-center gap-2.5 truncate">
+                                  <BossImage name={bossGroup.name} isDark={isDark} />
+                                  <div class="truncate">
+                                    <div class="flex items-center gap-1.5">
+                                      <span class={`text-[10px] px-1.5 py-0.5 rounded-lg border font-bold ${getBadgeColor(singleVariant.difficulty, isSelected)}`}>
+                                        {singleVariant.difficulty}
+                                      </span>
+                                      <span class={`text-sm font-extrabold truncate ${
+                                        isSelected
+                                          ? (isDark ? 'text-white' : 'text-sky-950')
+                                          : (isDark ? 'text-slate-200' : 'text-slate-800')
+                                      }`}>
+                                        {bossGroup.name}
+                                      </span>
+                                    </div>
+                                    <div class={`text-xs mt-1 ${isSelected ? 'text-sky-500 font-bold' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>
+                                      {formatMeso(unitPrice)}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div class="flex items-center gap-1.5 shrink-0 ml-1">
+                                  {isSelected && (
+                                    <div
+                                      onClick={e => e.stopPropagation()}
+                                      class={`flex items-center px-1.5 py-0.5 rounded-lg border text-xs ${themeInnerBox}`}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() => setBossPartySize(singleVariant.id, partySize - 1)}
+                                        class="w-5 h-5 rounded flex items-center justify-center font-bold"
+                                      >
+                                        -
+                                      </button>
+                                      <span class="px-1 text-sky-500 font-bold">{partySize}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setBossPartySize(singleVariant.id, partySize + 1)}
+                                        class="w-5 h-5 rounded flex items-center justify-center font-bold"
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  )}
+                                  <div class={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-black ${
+                                    isSelected
+                                      ? 'bg-sky-500 text-slate-950 shadow-sm'
+                                      : (isDark ? 'border border-slate-700' : 'border border-slate-300')
+                                  }`}>
+                                    {isSelected && '✓'}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ======================= 탭 3: 월간 보스 ======================= */}
+            {mainTab === 'monthly' && (
+              <div>
+                {loadingBosses ? (
+                  <div class="text-center py-10 text-sm text-slate-500">bosses.csv 로드 중...</div>
+                ) : loadError ? (
+                  <div class="p-4 bg-rose-950/40 border border-rose-900 rounded-xl text-center text-xs text-rose-400">
+                    <code>bosses.csv</code> 파일을 불러올 수 없습니다.
+                  </div>
+                ) : (
+                  <div class="space-y-3">
+                    <div class="p-3 bg-purple-950/20 border border-purple-800/30 rounded-2xl text-xs text-purple-300 flex items-center gap-2">
+                      <span>💡</span>
+                      <span>월간 보스는 주간 12개 제한을 소모하지 않으며 월 1회 별도 정산됩니다.</span>
+                    </div>
+                    {monthlyBosses.map(renderBossRow)}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ======================= 탭 4: 보스 득템 분배 정산 ======================= */}
+            {mainTab === 'drop' && (
+              <div class={`border rounded-2xl p-5 shadow-sm transition-colors ${
+                isDark ? 'bg-slate-900 border-amber-500/30' : 'bg-white border-amber-400/40 shadow-md'
+              }`}>
+                <div class="flex items-center justify-between mb-3">
+                  <div class="flex items-center gap-2">
+                    <span class="text-amber-500 text-base">✨</span>
+                    <span class={`text-sm font-bold ${isDark ? 'text-amber-300' : 'text-amber-800'}`}>
+                      보스 득템 분배 계산기
+                    </span>
+                    {activeChar && <span class="text-xs text-slate-400">({activeChar.name})</span>}
+                  </div>
+                  {activeCharDropTotal > 0 && (
+                    <span class="text-xs font-bold text-amber-500">
+                      +{formatMeso(activeCharDropTotal)}
+                    </span>
+                  )}
+                </div>
+
+                <div class={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border mb-3.5 ${themeInnerBox}`}>
+                  <label class="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={isMvpOrPc}
+                      onChange={e => toggleMvpBenefit(e.target.checked)}
+                      class="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                    />
+                    <span class={`text-xs font-medium ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                      MVP 실버 이상 또는 PC방 혜택
+                    </span>
+                  </label>
+                  <span class={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                    isDark
+                      ? (isMvpOrPc ? 'bg-amber-950 text-amber-400 border border-amber-800/50' : 'bg-slate-800 text-slate-400')
+                      : (isMvpOrPc ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-slate-200 text-slate-600')
+                  }`}>
+                    수수료 {isMvpOrPc ? '3%' : '5%'}
+                  </span>
+                </div>
+
+                <form onSubmit={handleAddDrop} class="space-y-3">
+                  <div class="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="아이템 이름 (예: 마깃안, 거공)"
+                      value={dropItemName}
+                      onChange={e => setDropItemName(e.target.value)}
+                      class={`border rounded-xl px-3.5 py-2 text-xs flex-1 focus:outline-none focus:border-amber-500 ${themeInnerInput}`}
+                    />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="판매가(메소)"
+                      value={currentInputPrice > 0 ? currentInputPrice.toLocaleString() : ''}
+                      onChange={e => {
+                        const clean = e.target.value.replace(/[^0-9]/g, '');
+                        setDropItemPriceRaw(clean);
+                      }}
+                      class={`w-40 border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-amber-500 text-right font-mono ${themeInnerInput}`}
+                    />
+                  </div>
+
+                  <div class={`border rounded-xl p-2.5 space-y-2 ${themeInnerBox}`}>
+                    <div class="flex items-center justify-between px-1">
+                      <span class={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>판매 금액 확인</span>
+                      <span class={`text-sm font-bold ${currentInputPrice > 0 ? 'text-amber-500' : (isDark ? 'text-slate-600' : 'text-slate-400')}`}>
+                        {currentInputPrice > 0 ? `= ${formatMeso(currentInputPrice)}` : '0 메소'}
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-0.5">
+                      <button type="button" onClick={() => addQuickAmount(10000000)} class={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap active:scale-95 transition-all ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-white border border-slate-200 text-slate-700'}`}>+1천만</button>
+                      <button type="button" onClick={() => addQuickAmount(50000000)} class={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap active:scale-95 transition-all ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-white border border-slate-200 text-slate-700'}`}>+5천만</button>
+                      <button type="button" onClick={() => addQuickAmount(100000000)} class={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+1억</button>
+                      <button type="button" onClick={() => addQuickAmount(500000000)} class={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+5억</button>
+                      <button type="button" onClick={() => addQuickAmount(1000000000)} class={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+10억</button>
+                      {currentInputPrice > 0 && (
+                        <button type="button" onClick={() => setDropItemPriceRaw('')} class={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap ml-auto ${isDark ? 'bg-rose-950/50 text-rose-300' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>초기화</button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div class={`flex items-center gap-2 p-2 rounded-xl border text-xs ${themeInnerBox}`}>
+                    <div class="flex items-center gap-1.5">
+                      <span class={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>수수료:</span>
+                      <select
+                        value={dropTaxRate}
+                        onChange={e => setDropTaxRate(Number(e.target.value))}
+                        class={`border text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-amber-500 ${
+                          isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
+                        }`}
+                      >
+                        <option value={3}>3% (MVP/PC방)</option>
+                        <option value={5}>5% (일반)</option>
+                        <option value={0}>0% (수수료 없음/직거래)</option>
+                      </select>
+                    </div>
+
+                    {/* 깔끔한 분배 옵션 */}
+                    <div class="flex items-center gap-1.5 ml-auto">
+                      <span class="text-xs font-semibold text-amber-500">분배:</span>
+                      <select
+                        value={dropPartyCount}
+                        onChange={e => setDropPartyCount(Number(e.target.value))}
+                        class={`border text-xs font-bold rounded-lg px-3 py-1 focus:outline-none focus:border-amber-500 ${
+                          isDark ? 'bg-slate-900 border-amber-600/50 text-white' : 'bg-white border-amber-400 text-slate-800'
+                        }`}
+                      >
+                        <option value={1}>1인</option>
+                        <option value={2}>2인</option>
+                        <option value={3}>3인</option>
+                        <option value={4}>4인</option>
+                        <option value={5}>5인</option>
+                        <option value={6}>6인</option>
+                      </select>
+                    </div>
+
+                    <button
+                      type="submit"
+                      class="bg-amber-600 hover:bg-amber-500 px-4 py-1.5 rounded-lg text-xs font-bold text-white transition-colors shadow-sm ml-1"
+                    >
+                      등록
+                    </button>
+                  </div>
+
+                  {currentInputPrice > 0 && (
+                    <div class={`text-xs border px-3.5 py-2 rounded-xl flex justify-between items-center ${
+                      isDark ? 'text-amber-300 bg-amber-950/20 border-amber-900/30' : 'text-amber-900 bg-amber-50 border-amber-200'
+                    }`}>
+                      <span>내 몫 (실 수령액):</span>
+                      <span class="font-bold text-base text-amber-500">{formatMeso(previewMyShare)}</span>
+                    </div>
+                  )}
+                </form>
+
+                <div class={`mt-5 pt-3.5 border-t ${isDark ? 'border-slate-800/80' : 'border-slate-200'}`}>
+                  <div class={`text-xs font-bold mb-2.5 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                    등록된 득템 내역 ({activeCharDrops.length}건)
+                  </div>
+                  {activeCharDrops.length > 0 ? (
+                    <div class="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar">
+                      {activeCharDrops.map(drop => (
+                        <div
+                          key={drop.id}
+                          class={`flex items-center justify-between border px-3.5 py-2 rounded-xl text-xs ${themeInnerBox}`}
+                        >
+                          <div>
+                            <span class={`font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{drop.name}</span>
+                            <div class={`text-[11px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                              원가 {formatMeso(drop.originalPrice)} · 수수료 {drop.taxRate}% · {drop.partyCount}인 분배
+                            </div>
+                          </div>
+                          <div class="flex items-center gap-2.5">
+                            <span class="text-amber-500 font-bold">{formatMeso(drop.price)}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteDrop(drop.id)}
+                              class="text-rose-500 hover:text-rose-400 text-xs p-1"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div class={`text-center py-6 text-xs border border-dashed rounded-xl ${
+                      isDark ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-300'
+                    }`}>
+                      등록된 득템 아이템이 없습니다.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* API Key 모달 */}
+            {showKeyModal && (
+              <div class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+                <div class={`border rounded-2xl p-5 max-w-xs w-full shadow-2xl ${themeCard}`}>
+                  <h3 class={`text-sm font-bold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>넥슨 오픈 API Key 설정</h3>
+                  <p class={`text-[11px] mb-4 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    키는 브라우저 내부(localStorage)에만 보관됩니다.
+                  </p>
+                  <input
+                    type="password"
+                    placeholder="test_... 또는 live_..."
+                    value={tempKey}
+                    onChange={e => setTempKey(e.target.value)}
+                    class={`w-full border rounded-xl px-3 py-2 text-xs mb-4 focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
+                  />
+                  <div class="flex gap-2">
+                    <button
+                      onClick={() => setShowKeyModal(false)}
+                      class={`flex-1 py-2 rounded-xl text-xs font-medium ${
+                        isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      취소
+                    </button>
+                    <button
+                      onClick={() => {
+                        localStorage.setItem('nexon_api_key', tempKey.trim());
+                        setApiKey(tempKey.trim());
+                        setShowKeyModal(false);
+                      }}
+                      class="flex-1 bg-sky-600 hover:bg-sky-500 text-white py-2 rounded-xl text-xs font-bold"
+                    >
+                      저장하기
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

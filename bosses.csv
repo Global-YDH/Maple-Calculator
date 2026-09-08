@@ -1,0 +1,78 @@
+﻿id,name,difficulty,price,cycle
+ez_zakum,자쿰,이지,114000,daily
+n_zakum,자쿰,노말,349000,daily
+ez_papulatus,파풀라투스,이지,390000,daily
+ez_magnus,매그너스,이지,411000,daily
+n_hilla,힐라,노말,455000,daily
+ez_horntail,혼테일,이지,502000,daily
+n_queen,블러디퀸,노말,551000,daily
+n_banban,반반,노말,551000,daily
+n_pierre,피에르,노말,551000,daily
+n_vellum,벨룸,노말,551000,daily
+n_horntail,혼테일,노말,576000,daily
+ez_vonleon,반레온,이지,602000,daily
+ez_arkarium,아카이럼,이지,656000,daily
+n_kaung,카웅,노말,712000,daily
+c_horntail,혼테일,카오스,770000,daily
+n_pinkbean,핑크빈,노말,799000,daily
+n_vonleon,반레온,노말,830000,daily
+h_vonleon,반레온,하드,1070000,daily
+n_arkarium,아카이럼,노말,1110000,daily
+n_magnus,매그너스,노말,1160000,daily
+n_papulatus,파풀라투스,노말,1200000,daily
+h_hilla,힐라,하드,1280000,daily
+c_pinkbean,핑크빈,카오스,1320000,daily
+n_cygnus,시그너스,노말,1360000,daily
+c_zakum,자쿰,카오스,8080000,weekly
+c_queen,블러디퀸,카오스,8140000,weekly
+c_banban,반반,카오스,8150000,weekly
+c_pierre,피에르,카오스,8170000,weekly
+h_magnus,매그너스,하드,8560000,weekly
+c_vellum,벨룸,카오스,9280000,weekly
+c_papulatus,파풀라투스,카오스,13100000,weekly
+n_lotus,스우,노말,16700000,weekly
+n_damien,데미안,노말,17500000,weekly
+n_slime,가디언 엔젤 슬라임,노말,25500000,weekly
+ez_lucid,루시드,이지,29800000,weekly
+ez_will,윌,이지,32300000,weekly
+n_lucid,루시드,노말,35600000,weekly
+n_will,윌,노말,41100000,weekly
+n_dusk,더스크,노말,44000000,weekly
+n_dunkel,듄켈,노말,47500000,weekly
+h_lotus,스우,하드,51500000,weekly
+h_damien,데미안,하드,48900000,weekly
+h_lucid,루시드,하드,62900000,weekly
+c_dusk,더스크,카오스,69800000,weekly
+n_verushilla,진 힐라,노말,71200000,weekly
+c_slime,가디언 엔젤 슬라임,카오스,75100000,weekly
+h_will,윌,하드,77100000,weekly
+h_dunkel,듄켈,하드,94400000,weekly
+h_verushilla,진 힐라,하드,106000000,weekly
+n_seren,세렌,노말,239000000,weekly
+ez_kalos,칼로스,이지,280000000,weekly
+ez_adversary,최초의 대적자,이지,308000000,weekly
+h_seren,세렌,하드,356000000,weekly
+ez_karing,카링,이지,377000000,weekly
+ez_bellona,벨로나,이지,440000000,weekly
+n_kalos,칼로스,노말,505000000,weekly
+n_adversary,최초의 대적자,노말,560000000,weekly
+ex_lotus,스우,익스트림,574000000,weekly
+n_brilliantdarkness,찬란한 흉성,노말,625000000,weekly
+n_karing,카링,노말,678000000,weekly
+n_bellona,벨로나,노말,850000000,weekly
+n_limbo,림보,노말,1026000000,weekly
+c_kalos,칼로스,카오스,1273000000,weekly
+n_baldrix,발드릭스,노말,1368000000,weekly
+h_adversary,최초의 대적자,하드,1435000000,weekly
+n_jupiter,유피테르,노말,1615000000,weekly
+h_karing,카링,하드,1739000000,weekly
+h_limbo,림보,하드,2385000000,weekly
+h_brilliantdarkness,찬란한 흉성,하드,2678000000,weekly
+h_bellona,벨로나,하드,2950000000,weekly
+h_baldrix,발드릭스,하드,3078000000,weekly
+ex_kalos,칼로스,익스트림,4104000000,weekly
+ex_adversary,최초의 대적자,익스트림,4712000000,weekly
+h_jupiter,유피테르,하드,4845000000,weekly
+ex_karing,카링,익스트림,5387000000,weekly
+h_theblackmage,검은 마법사,하드,665000000,monthly
+ex_theblackmage,검은 마법사,익스트림,8740000000,monthly
