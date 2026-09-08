@@ -24,7 +24,7 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
-    const DEFAULT_SB_URL = 'https://pmudomjxhvmnvusfnqhn.supabase.co';
+    const DEFAULT_SB_URL = 'https://pmudomjxhvmnusfnqhn.supabase.co';
     const DEFAULT_SB_KEY = 'sb_publishable_Efv0hHxppj1qBZmAU6PjJQ_Ua6dwlPj';
 
     function getTodayString() {
@@ -147,7 +147,7 @@
       const [syncId, setSyncId] = useState(() => localStorage.getItem('maple_sync_id') || '');
       const [syncPassword, setSyncPassword] = useState(() => localStorage.getItem('maple_sync_pw') || '');
       const [showSyncModal, setShowSyncModal] = useState(false);
-      const [syncMode, setSyncMode] = useState('register'); // 'register': 계정 생성, 'login': 기존 로그인, 'delete': 계정 삭제
+      const [syncMode, setSyncMode] = useState('register');
       const [tempSyncId, setTempSyncId] = useState('');
       const [tempSyncPassword, setTempSyncPassword] = useState('');
       const [syncStatus, setSyncStatus] = useState('로컬 모드 (저장됨)');
@@ -196,7 +196,6 @@
       const [dropTaxRate, setDropTaxRate] = useState(isMvpOrPc ? 3 : 5);
       const [dropPartyCount, setDropPartyCount] = useState(1);
 
-      // 계정 생성 (신규 등록) 함수
       const handleRegisterAccount = async (targetId, targetPw) => {
         if (!supabaseRef.current || !targetId || !targetPw) return false;
         setSyncStatus('계정 생성 중...');
@@ -234,7 +233,6 @@
         }
       };
 
-      // 기존 계정 로그인 (불러오기) 함수
       const handleLoginAccount = async (targetId, targetPw) => {
         if (!supabaseRef.current || !targetId || !targetPw) return false;
         setSyncStatus('불러오는 중...');
@@ -955,7 +953,7 @@
                       : (syncId ? 'bg-white border-slate-300 text-emerald-700 hover:bg-slate-100' : 'bg-sky-50 border-sky-300 text-sky-800')
                   }`}
                 >
-                  {syncId ? `☁️ 연동됨 (${syncId})` : '☁️ 계정 연동 및 삭제'}
+                  {syncId ? `☁️ 연동됨 (${syncId})` : '☁️ 계정 연동 및 백업'}
                 </button>
                 <button
                   type="button"
@@ -972,7 +970,7 @@
               </div>
             </div>
 
-            {/* 메인 2단 그리드 레이아웃 */}
+            {/* 메인 2단 그리드 레이아웃 (원래의 컴팩트한 비율 복원) */}
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
               {/* 좌측 패널: 캐릭터 관리 및 세로 목록 */}
@@ -1066,7 +1064,7 @@
                   {formError && <p class="text-[11px] text-rose-500 mt-1.5 px-1">{formError}</p>}
                 </div>
 
-                {/* 캐릭터 목록 영역 (모바일: 3열 그리드, PC: 세로 리스트) */}
+                {/* 캐릭터 목록 영역 (원래의 비율에 캐릭터 이름만 text-sm으로 깔끔하게 키움) */}
                 {characters.length > 0 && (
                   <div class={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
                     <div class="text-xs font-extrabold mb-3 flex items-center justify-between">
@@ -1076,27 +1074,41 @@
 
                     <div class="grid grid-cols-3 lg:grid-cols-1 gap-2.5 max-h-[500px] overflow-y-auto pr-1 no-scrollbar">
                       {characters.map(c => (
-                        <button
+                        <div
                           key={c.id}
                           onClick={() => setActiveCharId(c.id)}
-                          class={`w-full flex items-center gap-2.5 p-2.5 rounded-xl text-xs font-medium transition-all border text-left ${
+                          class={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-medium transition-all border cursor-pointer ${
                             activeCharId === c.id
                               ? (isDark ? 'bg-sky-950/80 border-sky-500 text-white shadow-sm' : 'bg-sky-50 border-sky-500 text-sky-900 shadow-sm font-bold')
                               : (isDark ? 'bg-slate-900/50 border-slate-800 text-slate-400 hover:bg-slate-800/60' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100')
                           }`}
                         >
-                          {c.image ? (
-                            <img src={c.image} alt="" class="w-8 h-8 rounded-full bg-slate-800 object-cover shrink-0" />
-                          ) : (
-                            <div class="w-8 h-8 rounded-full bg-sky-600 border border-sky-400 flex items-center justify-center text-xs text-white font-bold shrink-0">
-                              {c.name.slice(0, 1)}
+                          <div class="flex items-center gap-2.5 truncate flex-1">
+                            {c.image ? (
+                              <img src={c.image} alt="" class="w-8 h-8 rounded-full bg-slate-800 object-cover shrink-0" />
+                            ) : (
+                              <div class="w-8 h-8 rounded-full bg-sky-600 border border-sky-400 flex items-center justify-center text-xs text-white font-bold shrink-0">
+                                {c.name.slice(0, 1)}
+                              </div>
+                            )}
+                            <div class="truncate flex-1">
+                              <div class="font-bold text-sm truncate">{c.name}</div>
+                              <div class="text-[10px] opacity-70">Lv.{c.level}</div>
                             </div>
-                          )}
-                          <div class="truncate flex-1">
-                            <div class="font-bold text-xs truncate">{c.name}</div>
-                            <div class="text-[10px] opacity-70">Lv.{c.level}</div>
                           </div>
-                        </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteCharacter(c.id);
+                            }}
+                            class="text-rose-400 hover:text-rose-300 p-1.5 rounded-lg hover:bg-rose-500/25 transition-colors shrink-0 ml-1"
+                            title="캐릭터 삭제"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -1188,13 +1200,6 @@
                           </span>
                         )}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => deleteCharacter(activeChar.id)}
-                        class="text-[11px] text-rose-500 hover:text-rose-400 px-2 py-0.5 border border-dashed border-rose-500/40 rounded-lg transition-colors"
-                      >
-                        캐릭터 삭제
-                      </button>
                     </div>
 
                     <div class={`grid grid-cols-3 gap-1 p-1 rounded-xl border mb-2 shadow-sm ${themeInnerBox}`}>
@@ -1677,7 +1682,7 @@
               </div>
             )}
 
-            {/* 계정 연동 및 백업 모달 (계정 만들기 / 로그인 / 계정 삭제 탭 분리 적용) */}
+            {/* 계정 연동 및 백업 모달 */}
             {showSyncModal && (
               <div class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
                 <div class={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl ${themeCard}`}>
@@ -1686,7 +1691,6 @@
                     기기 간 데이터 연동을 위한 계정 관리 메뉴입니다.
                   </p>
 
-                  {/* 탭 전환 버튼 (생성 / 로그인 / 삭제) */}
                   <div class={`grid grid-cols-3 gap-1 p-1 rounded-xl border mb-3 ${themeInnerBox}`}>
                     <button
                       type="button"
