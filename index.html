@@ -431,7 +431,8 @@
         const weeklyBossCrystalMeso = soldWeeklyCrystals.reduce((sum, item) => sum + item.price, 0);
 
         const totalDailyWeekly = dailyCrystalSumPerDay * 7;
-        const totalCrystalWeekly = totalDailyWeekly + weeklyBossCrystalMeso + monthlyBossCrystalSum;
+        // 주간 수익 계산 시 월간 보스(검은마법사 등) 수익은 제외
+        const totalCrystalWeekly = totalDailyWeekly + weeklyBossCrystalMeso;
         const grandTotalWeekly = totalCrystalWeekly + totalDropMesoWeekly;
 
         const totalDailyMonthly = dailyCrystalSumPerDay * 30;
@@ -753,7 +754,7 @@
             }`}>
               <div class="flex items-center justify-between">
                 <div class="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider">
-                  {incomePeriod === 'weekly' ? '주간 총 예상 수익 (일간 7일+주간+월간)' : '월간 예상 수익 (일간 30일+주간 4주+월간)'}
+                  {incomePeriod === 'weekly' ? '주간 총 예상 수익 (일간 7일+주간)' : '월간 예상 수익 (일간 30일+주간 4주+월간)'}
                 </div>
                 <div class={`flex items-center p-0.5 rounded-lg border text-[10px] font-bold ${themeInnerBox}`}>
                   <button
@@ -1446,7 +1447,7 @@
               <div>메이플스토리 보스 수익 및 득템 정산 계산기</div>
               <div>
                 <a
-                  href="https://github.com/Global-YDH/Maple-Calculator"
+                  href="https://github.com"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="hover:underline text-sky-500 font-medium"
