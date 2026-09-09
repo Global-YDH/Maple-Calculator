@@ -14,6 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body { -webkit-tap-highlight-color: transparent; }
+    input, select, button { -webkit-user-select: auto; user-select: auto; }
     .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
@@ -317,9 +318,9 @@
       };
 
       const addQuickAmount = (amount) => {
-        const current = parseInt(dropItemPriceRaw || '0', 10);
+        const current = parseInt(dropItemPriceRaw.replace(/[^0-9]/g, '') || '0', 10);
         const next = Math.max(0, current + amount);
-        setDropItemPriceRaw(next > 0 ? String(next) : '');
+        setDropItemPriceRaw(next > 0 ? next.toLocaleString() : '');
       };
 
       const handleResetAllData = () => {
@@ -502,12 +503,10 @@
           alert('득템을 등록할 캐릭터를 먼저 선택해주세요!');
           return;
         }
-        if (!dropItemName.trim() || !dropItemPriceRaw) return;
+        const numericVal = parseInt(dropItemPriceRaw.replace(/[^0-9]/g, '') || '0', 10);
+        if (!dropItemName.trim() || numericVal <= 0) return;
 
-        const originalPrice = parseInt(dropItemPriceRaw, 10) || 0;
-        if (originalPrice <= 0) return;
-
-        const afterFee = originalPrice * ((100 - dropTaxRate) / 100);
+        const afterFee = numericVal * ((100 - dropTaxRate) / 100);
         const finalShare = Math.floor(afterFee / dropPartyCount);
 
         const newItem = {
@@ -515,7 +514,7 @@
           charId: activeCharId,
           charName: activeChar.name,
           name: dropItemName.trim(),
-          originalPrice: originalPrice,
+          originalPrice: numericVal,
           taxRate: dropTaxRate,
           partyCount: dropPartyCount,
           price: finalShare,
@@ -644,7 +643,7 @@
       const activeCharWeeklyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'weekly').length;
       const activeCharMonthlyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'monthly').length;
 
-      const currentInputPrice = parseInt(dropItemPriceRaw || '0', 10);
+      const currentInputPrice = parseInt(dropItemPriceRaw.replace(/[^0-9]/g, '') || '0', 10);
       const previewMyShare = currentInputPrice > 0
         ? Math.floor((currentInputPrice * ((100 - dropTaxRate) / 100)) / dropPartyCount)
         : 0;
@@ -1424,42 +1423,28 @@
                         </div>
 
                         <form onSubmit={handleAddDrop} class="space-y-3">
-                          <div class="flex flex-col sm:flex-row gap-2">
+                          {/* 1. 기본 정보 (모바일에서도 1줄 나란히 컴팩트 배치: 이름 + 획득일) */}
+                          <div class="flex items-center gap-2">
                             <input
                               type="text"
                               placeholder="아이템 이름 (예: 마깃안, 거공)"
                               value={dropItemName}
                               onChange={e => setDropItemName(e.target.value)}
-                              class={`border rounded-xl px-3.5 py-2 text-xs w-full sm:flex-1 focus:outline-none focus:border-amber-500 ${themeInnerInput}`}
+                              class={`border rounded-xl px-3.5 py-2 text-xs flex-1 min-w-0 focus:outline-none focus:border-amber-500 ${themeInnerInput}`}
                             />
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              placeholder="판매가(메소)"
-                              value={currentInputPrice > 0 ? currentInputPrice.toLocaleString() : ''}
-                              onChange={e => {
-                                const clean = e.target.value.replace(/[^0-9]/g, '');
-                                setDropItemPriceRaw(clean);
-                              }}
-                              class={`w-full sm:w-40 border rounded-xl px-3.5 py-2 text-xs focus:outline-none focus:border-amber-500 text-right font-mono ${themeInnerInput}`}
-                            />
-                          </div>
-
-                          <div class={`flex items-center justify-between px-3.5 py-2 rounded-xl border text-xs ${themeInnerBox}`}>
-                            <span class={`font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>획득 일자</span>
-                            <div class="flex items-center gap-2">
+                            <div class={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs shrink-0 ${themeInnerBox}`}>
                               <input
                                 type="date"
                                 value={dropDate}
                                 onChange={e => setDropDate(e.target.value)}
-                                class={`border rounded-lg px-2.5 py-1 text-xs focus:outline-none focus:border-amber-500 ${
+                                class={`border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-amber-500 ${
                                   isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
                                 }`}
                               />
                               <button
                                 type="button"
                                 onClick={() => setDropDate(getTodayString())}
-                                class={`text-[11px] px-2 py-1 rounded-lg border ${
+                                class={`text-[11px] px-2 py-1 rounded-lg border shrink-0 ${
                                   isDark ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700' : 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300'
                                 }`}
                               >
@@ -1468,37 +1453,67 @@
                             </div>
                           </div>
 
-                          {/* 빠른 금액 추가 버튼 영역: 모바일 4/3 균형 분할, PC 1줄 정렬 */}
-                          <div class={`border rounded-xl p-2.5 space-y-2 ${themeInnerBox}`}>
-                            <div class="flex items-center justify-between px-1">
-                              <span class={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>판매 금액 확인 (빠른 추가: 1억~100억)</span>
-                              <span class={`text-sm font-bold ${currentInputPrice > 0 ? 'text-amber-500' : (isDark ? 'text-slate-600' : 'text-slate-400')}`}>
-                                {currentInputPrice > 0 ? `= ${formatMeso(currentInputPrice)}` : '0 메소'}
-                              </span>
-                            </div>
-                            <div class="flex flex-col sm:flex-row sm:items-center gap-1.5 pt-0.5">
-                              {/* 1행: 4개 균등 배치 (1천만 ~ 5억) */}
-                              <div class="grid grid-cols-4 sm:flex sm:items-center gap-1.5 w-full sm:w-auto">
-                                <button type="button" onClick={() => addQuickAmount(10000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-white border border-slate-200 text-slate-700'}`}>+1천만</button>
-                                <button type="button" onClick={() => addQuickAmount(50000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-white border border-slate-200 text-slate-700'}`}>+5천만</button>
-                                <button type="button" onClick={() => addQuickAmount(100000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+1억</button>
-                                <button type="button" onClick={() => addQuickAmount(500000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+5억</button>
+                          {/* 2. 판매 금액 통합 입력 영역 (직접 입력창 + 실시간 한글 금액 + 빠른 3x3 버튼 모음) */}
+                          <div class={`border rounded-2xl p-3.5 space-y-3 ${themeInnerBox}`}>
+                            <div>
+                              <div class="flex items-center justify-between mb-1.5 px-1">
+                                <label class={`text-xs font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>판매 금액</label>
+                                <span class={`text-xs font-extrabold ${currentInputPrice > 0 ? 'text-amber-500' : (isDark ? 'text-slate-500' : 'text-slate-400')}`}>
+                                  {currentInputPrice > 0 ? `= ${formatMeso(currentInputPrice)}` : '0 메소'}
+                                </span>
                               </div>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9,]*"
+                                placeholder="판매 금액을 직접 입력하거나 아래 버튼을 누르세요"
+                                value={dropItemPriceRaw}
+                                onChange={e => {
+                                  const clean = e.target.value.replace(/[^0-9]/g, '');
+                                  if (!clean) {
+                                    setDropItemPriceRaw('');
+                                  } else {
+                                    setDropItemPriceRaw(parseInt(clean, 10).toLocaleString());
+                                  }
+                                }}
+                                class={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-amber-500 text-right font-mono text-sm ${themeInnerInput}`}
+                              />
+                            </div>
 
-                              {/* 2행: 3개 균등 배치 (10억 ~ 100억) + 초기화 버튼 */}
-                              <div class="flex items-center gap-1.5 w-full sm:w-auto flex-1">
-                                <div class="grid grid-cols-3 sm:flex sm:items-center gap-1.5 flex-1">
-                                  <button type="button" onClick={() => addQuickAmount(1000000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+10억</button>
-                                  <button type="button" onClick={() => addQuickAmount(5000000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+50억</button>
-                                  <button type="button" onClick={() => addQuickAmount(10000000000)} class={`text-xs px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+100억</button>
-                                </div>
-                                {currentInputPrice > 0 && (
-                                  <button type="button" onClick={() => setDropItemPriceRaw('')} class={`text-xs px-2.5 py-1.5 sm:py-1 rounded-lg whitespace-nowrap ml-auto shrink-0 ${isDark ? 'bg-rose-950/50 text-rose-300' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>초기화</button>
-                                )}
+                            {/* 빠른 금액 추가 버튼: 모바일 3분할(3x3) 완벽 정렬 */}
+                            <div class="space-y-1.5 pt-1">
+                              <div class="text-[11px] text-slate-400 px-1 font-medium">빠른 금액 누적 추가</div>
+                              <div class="grid grid-cols-3 sm:flex sm:flex-wrap gap-1.5">
+                                <button type="button" onClick={() => addQuickAmount(1000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-900 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+100만</button>
+                                <button type="button" onClick={() => addQuickAmount(5000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-900 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+500만</button>
+                                <button type="button" onClick={() => addQuickAmount(10000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+1천만</button>
+
+                                <button type="button" onClick={() => addQuickAmount(50000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+5천만</button>
+                                <button type="button" onClick={() => addQuickAmount(100000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+1억</button>
+                                <button type="button" onClick={() => addQuickAmount(500000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+5억</button>
+
+                                <button type="button" onClick={() => addQuickAmount(1000000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+10억</button>
+                                <button type="button" onClick={() => addQuickAmount(5000000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+50억</button>
+                                <button type="button" onClick={() => addQuickAmount(10000000000)} class={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+100억</button>
                               </div>
                             </div>
+
+                            {currentInputPrice > 0 && (
+                              <div class="flex justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setDropItemPriceRaw('')}
+                                  class={`text-xs px-3 py-1 rounded-lg font-bold border transition-colors ${
+                                    isDark ? 'bg-rose-950/60 border-rose-900/80 text-rose-300' : 'bg-rose-50 border-rose-200 text-rose-700'
+                                  }`}
+                                >
+                                  금액 비우기
+                                </button>
+                              </div>
+                            )}
                           </div>
 
+                          {/* 3. 수수료 및 분배 설정 + 등록 버튼 */}
                           <div class={`flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl border text-xs ${themeInnerBox}`}>
                             <div class="flex items-center gap-1.5 shrink-0">
                               <span class={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>수수료:</span>
@@ -1620,9 +1635,26 @@
 
             {/* 계정 연동 및 백업 모달 */}
             {showSyncModal && (
-              <div class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
-                <div class={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl ${themeCard}`}>
-                  <h3 class={`text-sm font-bold mb-1 ${isDark ? 'text-white' : 'text-slate-900'}`}>클라우드 계정 연동</h3>
+              <div
+                onClick={() => setShowSyncModal(false)}
+                class="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
+              >
+                <div
+                  onClick={e => e.stopPropagation()}
+                  class={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl relative ${themeCard}`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setShowSyncModal(false)}
+                    class={`absolute top-4 right-4 p-1 rounded-lg text-sm leading-none transition-colors ${
+                      isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+                    }`}
+                    title="닫기"
+                  >
+                    ✕
+                  </button>
+
+                  <h3 class={`text-sm font-bold mb-1 pr-6 ${isDark ? 'text-white' : 'text-slate-900'}`}>클라우드 계정 연동</h3>
                   <p class={`text-[11px] mb-3 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                     기기 간 데이터 연동을 위한 계정 관리 메뉴입니다.
                   </p>
@@ -1697,7 +1729,17 @@
                   )}
 
                   <div class="flex gap-2">
-                    {syncId && syncMode !== 'delete' ? (
+                    <button
+                      type="button"
+                      onClick={() => setShowSyncModal(false)}
+                      class={`px-3 py-2 rounded-xl text-xs font-medium ${
+                        isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                      }`}
+                    >
+                      취소
+                    </button>
+
+                    {syncId && syncMode !== 'delete' && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1711,20 +1753,10 @@
                           }
                         }}
                         class={`py-2 px-3 rounded-xl text-xs font-medium ${
-                          isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-700'
+                          isDark ? 'bg-slate-800 text-rose-400 hover:bg-slate-700' : 'bg-slate-200 text-rose-600 hover:bg-slate-300'
                         }`}
                       >
                         연동 해제
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setShowSyncModal(false)}
-                        class={`flex-1 py-2 rounded-xl text-xs font-medium ${
-                          isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        취소
                       </button>
                     )}
 
