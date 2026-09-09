@@ -65,8 +65,9 @@
 └── supabase/
     └── functions/
         └── get-character/ # Nexon Open API 중계용 Deno Edge Function
----
+```
 
+---
 ## 📄 라이선스
 This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
 
