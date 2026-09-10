@@ -314,6 +314,80 @@
         }
       };
 
+      const handleSyncSubmit = async () => {
+        const idVal = tempSyncId.trim();
+        const pwVal = tempSyncPassword.trim();
+        if (!idVal || !pwVal) {
+          alert('동기화 ID와 비밀번호를 모두 입력해주세요!');
+          return;
+        }
+
+        if (syncMode === 'delete') {
+          if (!confirm(`[${idVal}] 계정을 클라우드에서 정말 영구히 삭제하시겠습니까?`)) return;
+
+          if (!supabaseRef.current) return;
+          setSyncStatus('삭제 중...');
+          try {
+            const { data, error } = await supabaseRef.current
+              .from('maple_data')
+              .select('password')
+              .eq('id', idVal)
+              .single();
+
+            if (error || !data) {
+              alert('존재하지 않는 동기화 ID입니다.');
+              setSyncStatus('삭제 실패');
+              return;
+            }
+
+            if (data.password !== pwVal) {
+              alert('비밀번호가 일치하지 않아 계정을 삭제할 수 없습니다!');
+              setSyncStatus('비밀번호 오류');
+              return;
+            }
+
+            const { error: deleteError } = await supabaseRef.current
+              .from('maple_data')
+              .delete()
+              .eq('id', idVal);
+
+            if (deleteError) throw deleteError;
+
+            if (syncId === idVal) {
+              localStorage.removeItem('maple_sync_id');
+              localStorage.removeItem('maple_sync_pw');
+              setSyncId('');
+              setSyncPassword('');
+            }
+
+            setSyncStatus('로컬 모드 (저장됨)');
+            setShowSyncModal(false);
+            alert('클라우드 계정이 성공적으로 삭제되었습니다.');
+          } catch (err) {
+            console.error(err);
+            setSyncStatus('삭제 오류');
+            alert('계정 삭제 중 오류가 발생했습니다.');
+          }
+          return;
+        }
+
+        let success = false;
+        if (syncMode === 'register') {
+          success = await handleRegisterAccount(idVal, pwVal);
+        } else {
+          success = await handleLoginAccount(idVal, pwVal);
+        }
+
+        if (success) {
+          localStorage.setItem('maple_sync_id', idVal);
+          localStorage.setItem('maple_sync_pw', pwVal);
+          setSyncId(idVal);
+          setSyncPassword(pwVal);
+          setShowSyncModal(false);
+          alert(syncMode === 'register' ? '계정이 성공적으로 생성되고 연동되었습니다!' : '기존 계정 데이터를 성공적으로 불러왔습니다!');
+        }
+      };
+
       useEffect(() => {
         if (DEFAULT_SB_URL && DEFAULT_SB_KEY && syncId && syncPassword) {
           handleLoginAccount(syncId, syncPassword);
@@ -1255,7 +1329,7 @@
                           )}
                           {mainTab === 'monthly' && (
                             <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>
-                              [{activeChar.name}] 월간 보스 클리어: <strong className="text-purple-400 font-bold">{activeCharMonthlyCount}</strong>개
+                              [{activeChar.name}] 월간 보스 클리어: <strong className={activeCharWeeklyCount > 12 ? 'text-purple-400 font-bold' : 'text-purple-400 font-bold'}>{activeCharMonthlyCount}</strong>개
                             </span>
                           )}
                           {mainTab === 'drop' && (
@@ -1915,6 +1989,11 @@
                         placeholder="비밀번호 입력"
                         value={tempSyncPassword}
                         onChange={e => setTempSyncPassword(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            handleSyncSubmit();
+                          }
+                        }}
                         className={`w-full border rounded-xl px-3 py-2 text-xs focus:outline-none ${
                           syncMode === 'delete' ? 'focus:border-rose-500' : 'focus:border-sky-500'
                         } ${themeInnerInput}`}
@@ -1962,79 +2041,7 @@
 
                     <button
                       type="button"
-                      onClick={async () => {
-                        const idVal = tempSyncId.trim();
-                        const pwVal = tempSyncPassword.trim();
-                        if (!idVal || !pwVal) {
-                          alert('동기화 ID와 비밀번호를 모두 입력해주세요!');
-                          return;
-                        }
-
-                        if (syncMode === 'delete') {
-                          if (!confirm(`[${idVal}] 계정을 클라우드에서 정말 영구히 삭제하시겠습니까?`)) return;
-
-                          if (!supabaseRef.current) return;
-                          setSyncStatus('삭제 중...');
-                          try {
-                            const { data, error } = await supabaseRef.current
-                              .from('maple_data')
-                              .select('password')
-                              .eq('id', idVal)
-                              .single();
-
-                            if (error || !data) {
-                              alert('존재하지 않는 동기화 ID입니다.');
-                              setSyncStatus('삭제 실패');
-                              return;
-                            }
-
-                            if (data.password !== pwVal) {
-                              alert('비밀번호가 일치하지 않아 계정을 삭제할 수 없습니다!');
-                              setSyncStatus('비밀번호 오류');
-                              return;
-                            }
-
-                            const { error: deleteError } = await supabaseRef.current
-                              .from('maple_data')
-                              .delete()
-                              .eq('id', idVal);
-
-                            if (deleteError) throw deleteError;
-
-                            if (syncId === idVal) {
-                              localStorage.removeItem('maple_sync_id');
-                              localStorage.removeItem('maple_sync_pw');
-                              setSyncId('');
-                              setSyncPassword('');
-                            }
-
-                            setSyncStatus('로컬 모드 (저장됨)');
-                            setShowSyncModal(false);
-                            alert('클라우드 계정이 성공적으로 삭제되었습니다.');
-                          } catch (err) {
-                            console.error(err);
-                            setSyncStatus('삭제 오류');
-                            alert('계정 삭제 중 오류가 발생했습니다.');
-                          }
-                          return;
-                        }
-
-                        let success = false;
-                        if (syncMode === 'register') {
-                          success = await handleRegisterAccount(idVal, pwVal);
-                        } else {
-                          success = await handleLoginAccount(idVal, pwVal);
-                        }
-
-                        if (success) {
-                          localStorage.setItem('maple_sync_id', idVal);
-                          localStorage.setItem('maple_sync_pw', pwVal);
-                          setSyncId(idVal);
-                          setSyncPassword(pwVal);
-                          setShowSyncModal(false);
-                          alert(syncMode === 'register' ? '계정이 성공적으로 생성되고 연동되었습니다!' : '기존 계정 데이터를 성공적으로 불러왔습니다!');
-                        }
-                      }}
+                      onClick={handleSyncSubmit}
                       className={`flex-1 py-2 rounded-xl text-xs font-bold text-white transition-colors whitespace-nowrap ${
                         syncMode === 'delete'
                           ? 'bg-rose-600 hover:bg-rose-500'
