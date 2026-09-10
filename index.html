@@ -70,7 +70,7 @@
     }
 
     function formatMeso(meso) {
-      if (!meso) return '0 메소';
+      if (!meso && meso !== 0) return '0 메소';
       const absVal = Math.abs(meso);
       const jo = Math.floor(absVal / 1000000000000);
       const eok = Math.floor((absVal % 1000000000000) / 100000000);
@@ -118,19 +118,22 @@
           if (h) obj[h] = result[i] !== undefined ? result[i] : '';
         });
 
-        const rawPrice = String(obj.price || '0').replace(/[^0-9]/g, '');
         const cycle = (obj.cycle || 'weekly').trim().toLowerCase();
-
         if (cycle === 'daily') return null;
+
+        const pBefore = parseInt(String(obj.price_before || obj.price || '0').replace(/[^0-9]/g, ''), 10) || 0;
+        const pAfter = parseInt(String(obj.price_after || obj.price || '0').replace(/[^0-9]/g, ''), 10) || pBefore;
 
         return {
           id: obj.id,
           name: obj.name,
           difficulty: obj.difficulty,
           cycle: cycle,
-          price: parseInt(rawPrice, 10) || 0
+          priceBefore: pBefore,
+          priceAfter: pAfter,
+          price: pBefore
         };
-      }).filter(item => item && item.id && item.price > 0);
+      }).filter(item => item && item.id && (item.priceBefore > 0 || item.priceAfter > 0));
     }
 
     function BossImage({ name, isDark }) {
@@ -607,169 +610,130 @@
 
       const calculation = useMemo(() => {
         const bossMap = Object.fromEntries(bossList.map(b => [b.id, b]));
-        const candidateWeeklyCrystals = [];
+
         let totalDropMesoWeekly = 0;
         let totalDropMesoMonthly = 0;
-        let monthlyBossCrystalSum = 0;
-        const charWeeklyTotals = {};
 
         const now = new Date();
         const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         const currentThursdayTime = getCurrentThursdayResetTime();
         const currentWednesdayEndTime = currentThursdayTime + (7 * 24 * 60 * 60 * 1000) - 1000;
 
+        let beforeCandidateWeekly = [];
+        let beforeMonthlyCrystalSum = 0;
+
+        let afterCandidateWeekly = [];
+        let afterMonthlyCrystalSum = 0;
+
         characters.forEach(char => {
-          const charWeekly = [];
+          const charWeeklyBefore = [];
+          const charWeeklyAfter = [];
 
           Object.entries(char.clears || {}).forEach(([bId, partySize]) => {
             const boss = bossMap[bId];
             if (!boss) return;
 
-            const unitPrice = Math.floor(boss.price / partySize);
+            const unitBefore = Math.floor(boss.priceBefore / partySize);
+            const unitAfter = Math.floor(boss.priceAfter / partySize);
 
             if (boss.cycle === 'monthly') {
-              monthlyBossCrystalSum += unitPrice;
+              beforeMonthlyCrystalSum += unitBefore;
+              afterMonthlyCrystalSum += unitAfter;
             } else if (boss.cycle === 'weekly') {
-              charWeekly.push({
-                charId: char.id,
-                bossId: boss.id,
-                price: unitPrice,
-                cycle: 'weekly'
-              });
+              charWeeklyBefore.push({ price: unitBefore });
+              charWeeklyAfter.push({ price: unitAfter });
             }
           });
 
-          charWeekly.sort((a, b) => b.price - a.price);
-          const top12 = charWeekly.slice(0, 12);
-          candidateWeeklyCrystals.push(...top12);
-          charWeeklyTotals[char.id] = top12.reduce((sum, item) => sum + item.price, 0);
+          charWeeklyBefore.sort((a, b) => b.price - a.price);
+          beforeCandidateWeekly.push(...charWeeklyBefore.slice(0, 12));
+
+          charWeeklyAfter.sort((a, b) => b.price - a.price);
+          afterCandidateWeekly.push(...charWeeklyAfter.slice(0, 12));
         });
 
         allDrops.forEach(d => {
           const dropTime = new Date((d.date || getTodayString()) + 'T00:00:00').getTime();
-
           if (dropTime >= currentThursdayTime && dropTime <= currentWednesdayEndTime) {
             totalDropMesoWeekly += d.price;
           }
-
-          const dropDateStr = d.date || '';
-          const dropYm = dropDateStr.length >= 7 ? dropDateStr.slice(0, 7) : '';
-          if (dropYm === currentYearMonth) {
+          if ((d.date || '').slice(0, 7) === currentYearMonth) {
             totalDropMesoMonthly += d.price;
           }
         });
 
-        candidateWeeklyCrystals.sort((a, b) => b.price - a.price);
-        const soldWeeklyCrystals = candidateWeeklyCrystals.slice(0, 90);
-        const weeklyBossCrystalMeso = soldWeeklyCrystals.reduce((sum, item) => sum + item.price, 0);
+        beforeCandidateWeekly.sort((a, b) => b.price - a.price);
+        const soldBeforeWeekly = beforeCandidateWeekly.slice(0, 90);
+        const crystalBeforeWeekly = soldBeforeWeekly.reduce((sum, item) => sum + item.price, 0);
 
-        const totalCrystalWeekly = weeklyBossCrystalMeso;
-        const grandTotalWeekly = totalCrystalWeekly + totalDropMesoWeekly;
+        afterCandidateWeekly.sort((a, b) => b.price - a.price);
+        const soldAfterWeekly = afterCandidateWeekly.slice(0, 90);
+        const crystalAfterWeekly = soldAfterWeekly.reduce((sum, item) => sum + item.price, 0);
 
-        const totalCrystalMonthly = (weeklyBossCrystalMeso * 4) + monthlyBossCrystalSum;
-        const grandTotalMonthly = totalCrystalMonthly + totalDropMesoMonthly;
+        const totalBeforeWeeklyVal = crystalBeforeWeekly + totalDropMesoWeekly;
+        const totalAfterWeeklyVal = crystalAfterWeekly + totalDropMesoWeekly;
+        const diffWeeklyVal = totalAfterWeeklyVal - totalBeforeWeeklyVal;
+        const percentWeekly = totalBeforeWeeklyVal > 0 ? ((diffWeeklyVal / totalBeforeWeeklyVal) * 100).toFixed(2) : '0.00';
+
+        const totalBeforeMonthlyVal = (crystalBeforeWeekly * 4) + beforeMonthlyCrystalSum + totalDropMesoMonthly;
+        const totalAfterMonthlyVal = (crystalAfterWeekly * 4) + afterMonthlyCrystalSum + totalDropMesoMonthly;
+        const diffMonthlyVal = totalAfterMonthlyVal - totalBeforeMonthlyVal;
+        const percentMonthly = totalBeforeMonthlyVal > 0 ? ((diffMonthlyVal / totalBeforeMonthlyVal) * 100).toFixed(2) : '0.00';
 
         return {
           weekly: {
-            crystalMeso: totalCrystalWeekly,
-            dropMeso: totalDropMesoWeekly,
-            grandTotal: grandTotalWeekly,
-            soldCount: soldWeeklyCrystals.length
+            before: totalBeforeWeeklyVal,
+            after: totalAfterWeeklyVal,
+            diff: diffWeeklyVal,
+            percent: percentWeekly
           },
           monthly: {
-            crystalMeso: totalCrystalMonthly,
-            dropMeso: totalDropMesoMonthly,
-            grandTotal: grandTotalMonthly,
-            soldCount: soldWeeklyCrystals.length
-          },
-          charWeeklyTotals
+            before: totalBeforeMonthlyVal,
+            after: totalAfterMonthlyVal,
+            diff: diffMonthlyVal,
+            percent: percentMonthly
+          }
         };
       }, [characters, bossList, allDrops]);
 
       const bossMap = useMemo(() => Object.fromEntries(bossList.map(b => [b.id, b])), [bossList]);
 
       const getCharacterSummary = (char) => {
-        let crystalWeeklyList = [];
-        let crystalMonthly = 0;
+        let weeklyBeforeList = [];
+        let weeklyAfterList = [];
+        let monthlyBefore = 0;
+        let monthlyAfter = 0;
+
         Object.entries(char.clears || {}).forEach(([bId, partySize]) => {
           const boss = bossMap[bId];
           if (!boss) return;
-          const unitPrice = Math.floor(boss.price / partySize);
-          if (boss.cycle === 'monthly') crystalMonthly += unitPrice;
-          else if (boss.cycle === 'weekly') crystalWeeklyList.push(unitPrice);
-        });
-        crystalWeeklyList.sort((a, b) => b - a);
-        const crystalWeekly = crystalWeeklyList.slice(0, 12).reduce((sum, p) => sum + p, 0);
+          const unitBefore = Math.floor(boss.priceBefore / partySize);
+          const unitAfter = Math.floor(boss.priceAfter / partySize);
 
-        const now = new Date();
-        const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const currentThursdayTime = getCurrentThursdayResetTime();
-        const currentWednesdayEndTime = currentThursdayTime + (7 * 24 * 60 * 60 * 1000) - 1000;
-        let charDropWeekly = 0;
-        let charDropMonthly = 0;
-        (char.drops || []).forEach(d => {
-          const dropTime = new Date((d.date || getTodayString()) + 'T00:00:00').getTime();
-          if (dropTime >= currentThursdayTime && dropTime <= currentWednesdayEndTime) charDropWeekly += d.price;
-          if ((d.date || '').slice(0, 7) === currentYearMonth) charDropMonthly += d.price;
+          if (boss.cycle === 'monthly') {
+            monthlyBefore += unitBefore;
+            monthlyAfter += unitAfter;
+          } else if (boss.cycle === 'weekly') {
+            weeklyBeforeList.push(unitBefore);
+            weeklyAfterList.push(unitAfter);
+          }
         });
 
-        const weeklyTotal = crystalWeekly + charDropWeekly;
-        const monthlyTotal = (crystalWeekly * 4) + crystalMonthly + charDropMonthly;
+        weeklyBeforeList.sort((a, b) => b - a);
+        weeklyAfterList.sort((a, b) => b - a);
 
-        const lastCharMeso = lastWeekSnapshot?.chars?.[char.id];
-        const diffWeekly = typeof lastCharMeso === 'number' ? crystalWeekly - lastCharMeso : 0;
+        const cWeeklyBefore = weeklyBeforeList.slice(0, 12).reduce((sum, p) => sum + p, 0);
+        const cWeeklyAfter = weeklyAfterList.slice(0, 12).reduce((sum, p) => sum + p, 0);
 
         return {
-          weeklyTotal,
-          monthlyTotal,
-          crystalWeekly,
-          crystalMonthly,
-          dropWeekly: charDropWeekly,
-          dropMonthly: charDropMonthly,
-          diffWeekly,
-          weeklyCount: crystalWeeklyList.length
+          weeklyBefore: cWeeklyBefore,
+          weeklyAfter: cWeeklyAfter,
+          weeklyDiff: cWeeklyAfter - cWeeklyBefore,
+          monthlyBefore: (cWeeklyBefore * 4) + monthlyBefore,
+          monthlyAfter: (cWeeklyAfter * 4) + monthlyAfter,
+          weeklyCount: weeklyBeforeList.length
         };
       };
-
-      useEffect(() => {
-        if (!currentWeekKey || calculation.weekly.crystalMeso <= 0) return;
-        setWeeklyHistory(prev => {
-          const currentEntry = prev[currentWeekKey] || {};
-          if (currentEntry.accountTotal === calculation.weekly.crystalMeso) return prev;
-
-          return {
-            ...prev,
-            [currentWeekKey]: {
-              accountTotal: calculation.weekly.crystalMeso,
-              chars: calculation.charWeeklyTotals
-            }
-          };
-        });
-      }, [currentWeekKey, calculation.weekly.crystalMeso, calculation.charWeeklyTotals]);
-
-      const handleCloneToLastWeekForTest = () => {
-        if (calculation.weekly.crystalMeso <= 0) {
-          alert('먼저 보스를 1개 이상 체크한 후 눌러주세요!');
-          return;
-        }
-
-        const nextHistory = {
-          ...weeklyHistory,
-          [lastWeekKey]: {
-            accountTotal: calculation.weekly.crystalMeso,
-            chars: { ...calculation.charWeeklyTotals }
-          }
-        };
-
-        setWeeklyHistory(nextHistory);
-        localStorage.setItem('maple_weekly_history_v2', JSON.stringify(nextHistory));
-        alert(`현재 수익(${formatMeso(calculation.weekly.crystalMeso)})이 지난주(${lastWeekKey}) 기록으로 복제되었습니다!\n이제 보스 난이도를 올리거나 다른 보스를 체크하여 증감 배지를 확인해보세요.`);
-      };
-
-      const lastWeekSnapshot = weeklyHistory[lastWeekKey];
-      const accountDiffWeekly = lastWeekSnapshot && typeof lastWeekSnapshot.accountTotal === 'number'
-        ? calculation.weekly.crystalMeso - lastWeekSnapshot.accountTotal
-        : 0;
 
       const currentCalc = incomePeriod === 'weekly' ? calculation.weekly : calculation.monthly;
 
@@ -785,7 +749,6 @@
 
       const { weeklyMultiBosses, weeklySingleBosses, monthlyBosses } = useMemo(() => {
         const diffOrder = { '이지': 1, '노말': 2, '하드': 3, '카오스': 4, '익스트림': 5 };
-
         const groupByCycleStrictOrder = (targetCycle) => {
           const map = new Map();
           bossList
@@ -796,18 +759,14 @@
               }
               map.get(b.name).variants.push(b);
             });
-
           const list = Array.from(map.values());
           list.forEach(boss => {
             boss.variants.sort((a, b) => (diffOrder[a.difficulty] || 9) - (diffOrder[b.difficulty] || 9));
           });
-
           return list;
         };
-
         const weeklyList = groupByCycleStrictOrder('weekly');
         const monthlyList = groupByCycleStrictOrder('monthly');
-
         return {
           weeklyMultiBosses: weeklyList.filter(b => b.variants.length > 1),
           weeklySingleBosses: weeklyList.filter(b => b.variants.length === 1),
@@ -817,7 +776,6 @@
 
       const themeContainer = isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
       const themeCard = isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
-      const themeCardSub = isDark ? 'bg-slate-900/60 border-slate-800/80' : 'bg-white/80 border-slate-200 shadow-sm';
       const themeInnerInput = isDark ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500' : 'bg-slate-100 border-slate-300 text-slate-900 placeholder-slate-400';
       const themeInnerBox = isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200';
 
@@ -853,7 +811,8 @@
         const selectedVariant = bossGroup.variants.find(v => Boolean(activeChar?.clears?.[v.id]));
         const isAnySelected = Boolean(selectedVariant);
         const partySize = selectedVariant ? (activeChar?.clears?.[selectedVariant.id] || 1) : 1;
-        const unitPrice = selectedVariant ? Math.floor(selectedVariant.price / partySize) : 0;
+        const unitBefore = selectedVariant ? Math.floor(selectedVariant.priceBefore / partySize) : 0;
+        const unitAfter = selectedVariant ? Math.floor(selectedVariant.priceAfter / partySize) : 0;
 
         if (isSingle) {
           return (
@@ -875,57 +834,27 @@
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-lg border font-bold ${getBadgeColor(singleVariant.difficulty, isAnySelected)}`}>
                       {singleVariant.difficulty}
                     </span>
-                    <span className={`text-sm font-extrabold ${
-                      isAnySelected
-                        ? (isDark ? 'text-white' : 'text-sky-950')
-                        : (isDark ? 'text-slate-200' : 'text-slate-800')
-                    }`}>
+                    <span className={`text-sm font-extrabold ${isAnySelected ? (isDark ? 'text-white' : 'text-sky-950') : (isDark ? 'text-slate-200' : 'text-slate-800')}`}>
                       {bossGroup.name}
                     </span>
                   </div>
-                  <div className={`text-xs mt-0.5 whitespace-nowrap ${
-                    isAnySelected
-                      ? 'text-sky-500 font-bold'
-                      : (isDark ? 'text-slate-400' : 'text-slate-500')
-                  }`}>
-                    {formatMeso(unitPrice || singleVariant.price)}
+                  <div className={`text-xs mt-0.5 flex items-center gap-2 ${isAnySelected ? 'text-sky-500 font-bold' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>
+                    <span>전: {formatMeso(unitBefore || singleVariant.priceBefore)}</span>
+                    <span className="opacity-40">|</span>
+                    <span className="text-amber-400">후: {formatMeso(unitAfter || singleVariant.priceAfter)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
                 {isAnySelected && (
-                  <div
-                    onClick={e => e.stopPropagation()}
-                    className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border ${themeInnerBox}`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setBossPartySize(singleVariant.id, partySize - 1)}
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
-                        isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      -
-                    </button>
+                  <div onClick={e => e.stopPropagation()} className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border ${themeInnerBox}`}>
+                    <button type="button" onClick={() => setBossPartySize(singleVariant.id, partySize - 1)} className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${isDark ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 border border-slate-300'}`}>-</button>
                     <span className="text-xs px-1 text-sky-500 font-bold whitespace-nowrap">{partySize}인</span>
-                    <button
-                      type="button"
-                      onClick={() => setBossPartySize(singleVariant.id, partySize + 1)}
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
-                        isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      +
-                    </button>
+                    <button type="button" onClick={() => setBossPartySize(singleVariant.id, partySize + 1)} className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${isDark ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 border border-slate-300'}`}>+</button>
                   </div>
                 )}
-
-                <div className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-black ${
-                  isAnySelected
-                    ? 'bg-sky-500 text-slate-950 shadow-sm'
-                    : (isDark ? 'border border-slate-700' : 'border border-slate-300')
-                }`}>
+                <div className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-black ${isAnySelected ? 'bg-sky-500 text-slate-950 shadow-sm' : (isDark ? 'border border-slate-700' : 'border border-slate-300')}`}>
                   {isAnySelected && '✓'}
                 </div>
               </div>
@@ -934,36 +863,20 @@
         }
 
         return (
-          <div
-            key={bossGroup.name}
-            className={`px-3.5 py-2.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
-              isAnySelected
-                ? (bossGroup.cycle === 'monthly'
-                    ? (isDark ? 'bg-slate-900 border-purple-500/80 shadow-md' : 'bg-purple-50/70 border-purple-400 shadow-sm')
-                    : (isDark ? 'bg-slate-900 border-sky-500/80 shadow-md' : 'bg-sky-50/70 border-sky-400 shadow-sm'))
-                : (isDark ? 'bg-slate-900/50 border-slate-800/80' : 'bg-white border-slate-200')
-            }`}
-          >
+          <div key={bossGroup.name} className={`px-3.5 py-2.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${isAnySelected ? (isDark ? 'bg-slate-900 border-sky-500/80 shadow-md' : 'bg-sky-50/70 border-sky-400 shadow-sm') : (isDark ? 'bg-slate-900/50 border-slate-800/80' : 'bg-white border-slate-200')}`}>
             <div className="flex items-center gap-3 min-w-[120px]">
               <BossImage name={bossGroup.name} isDark={isDark} />
               <div>
-                <div className={`text-sm font-extrabold leading-snug ${
-                  isAnySelected
-                    ? (isDark ? 'text-white' : 'text-sky-950')
-                    : (isDark ? 'text-slate-200' : 'text-slate-800')
-                }`}>
+                <div className={`text-sm font-extrabold leading-snug ${isAnySelected ? (isDark ? 'text-white' : 'text-sky-950') : (isDark ? 'text-slate-200' : 'text-slate-800')}`}>
                   {bossGroup.name}
                 </div>
                 {isAnySelected ? (
-                  <div className={`text-xs font-bold mt-0.5 whitespace-nowrap ${
-                    bossGroup.cycle === 'monthly' ? 'text-purple-400' : 'text-sky-500'
-                  }`}>
-                    {formatMeso(unitPrice)}
+                  <div className="text-[11px] font-bold mt-0.5 flex items-center gap-1.5 whitespace-nowrap">
+                    <span className="text-sky-400">전:{formatMeso(unitBefore)}</span>
+                    <span className="text-amber-400">후:{formatMeso(unitAfter)}</span>
                   </div>
                 ) : (
-                  <div className={`text-[10px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                    선택안됨
-                  </div>
+                  <div className={`text-[10px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>선택안됨</div>
                 )}
               </div>
             </div>
@@ -971,16 +884,13 @@
             <div className="flex items-center gap-2 flex-wrap justify-end flex-1">
               {bossGroup.variants.map(v => {
                 const isSelected = activeChar?.clears?.[v.id];
-
                 return (
                   <button
                     key={v.id}
                     type="button"
                     disabled={!activeChar}
                     onClick={() => selectBossDifficulty(v, variantIds)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 whitespace-nowrap ${getBadgeColor(v.difficulty, isSelected)} ${
-                      !activeChar ? 'opacity-50 cursor-not-allowed' : ''
-                    }`}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all active:scale-95 whitespace-nowrap ${getBadgeColor(v.difficulty, isSelected)} ${!activeChar ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     {v.difficulty}
                   </button>
@@ -989,27 +899,9 @@
 
               {isAnySelected && (
                 <div className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border ml-1 ${themeInnerBox}`}>
-                  <button
-                    type="button"
-                    onClick={() => setBossPartySize(selectedVariant.id, partySize - 1)}
-                    className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
-                      isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    -
-                  </button>
-                  <span className={`text-xs px-1 font-bold whitespace-nowrap ${
-                    bossGroup.cycle === 'monthly' ? 'text-purple-400' : 'text-sky-500'
-                  }`}>{partySize}인</span>
-                  <button
-                    type="button"
-                    onClick={() => setBossPartySize(selectedVariant.id, partySize + 1)}
-                    className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${
-                      isDark ? 'bg-slate-800 text-white hover:bg-slate-700' : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    +
-                  </button>
+                  <button type="button" onClick={() => setBossPartySize(selectedVariant.id, partySize - 1)} className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${isDark ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 border border-slate-300'}`}>-</button>
+                  <span className="text-xs px-1 text-sky-500 font-bold whitespace-nowrap">{partySize}인</span>
+                  <button type="button" onClick={() => setBossPartySize(selectedVariant.id, partySize + 1)} className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-extrabold active:scale-95 ${isDark ? 'bg-slate-800 text-white' : 'bg-white text-slate-700 border border-slate-300'}`}>+</button>
                 </div>
               )}
             </div>
@@ -1037,177 +929,98 @@
               </div>
 
               <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
-                <button
-                  type="button"
-                  onClick={handleCloneToLastWeekForTest}
-                  className={`text-xs px-2.5 py-1.5 border rounded-xl font-semibold transition-all shrink-0 active:scale-95 whitespace-nowrap ${
-                    isDark
-                      ? 'bg-purple-950/60 border-purple-800/80 text-purple-300 hover:bg-purple-900/60'
-                      : 'bg-purple-50 border-purple-300 text-purple-800 hover:bg-purple-100'
-                  }`}
-                  title="현재 보스 결정석 수익을 가상의 지난주 데이터로 복제 저장합니다."
-                >
-                  🧪 지난주 데이터로 복사
-                </button>
-
-                <button
-                  type="button"
-                  onClick={toggleTheme}
-                  className={`text-xs px-2.5 py-1.5 border rounded-xl transition-all flex items-center gap-1 font-semibold shrink-0 whitespace-nowrap ${
-                    isDark
-                      ? 'bg-slate-800 border-slate-700 text-amber-300 hover:bg-slate-700'
-                      : 'bg-white border-slate-300 text-indigo-600 hover:bg-slate-100 shadow-sm'
-                  }`}
-                >
+                <button type="button" onClick={toggleTheme} className={`text-xs px-2.5 py-1.5 border rounded-xl transition-all flex items-center gap-1 font-semibold shrink-0 whitespace-nowrap ${isDark ? 'bg-slate-800 border-slate-700 text-amber-300' : 'bg-white border-slate-300 text-indigo-600 shadow-sm'}`}>
                   <span>{isDark ? '🌙 다크' : '☀️ 라이트'}</span>
                 </button>
-
-                <button
-                  onClick={() => {
-                    setTempSyncId(syncId || '');
-                    setTempSyncPassword('');
-                    setSyncMode(syncId ? 'login' : 'register');
-                    setShowSyncModal(true);
-                  }}
-                  className={`text-xs px-2.5 py-1.5 border rounded-xl font-semibold transition-colors shrink-0 whitespace-nowrap ${
-                    isDark
-                      ? (syncId ? 'bg-slate-800 border-slate-700 text-emerald-400 hover:text-emerald-300' : 'bg-sky-950/60 border-sky-800/80 text-sky-300')
-                      : (syncId ? 'bg-white border-slate-300 text-emerald-700 hover:bg-slate-100' : 'bg-sky-50 border-sky-300 text-sky-800')
-                  }`}
-                >
+                <button onClick={() => { setTempSyncId(syncId || ''); setTempSyncPassword(''); setSyncMode(syncId ? 'login' : 'register'); setShowSyncModal(true); }} className={`text-xs px-2.5 py-1.5 border rounded-xl font-semibold transition-colors shrink-0 whitespace-nowrap ${isDark ? (syncId ? 'bg-slate-800 border-slate-700 text-emerald-400' : 'bg-sky-950/60 border-sky-800/80 text-sky-300') : (syncId ? 'bg-white border-slate-300 text-emerald-700' : 'bg-sky-50 border-sky-300 text-sky-800')}`}>
                   {syncId ? `☁️ 연동됨 (${syncId})` : '☁️ 계정 연동'}
                 </button>
-
-                <button
-                  type="button"
-                  onClick={handleResetAllData}
-                  className={`text-xs px-2.5 py-1.5 border rounded-xl font-semibold transition-colors shrink-0 whitespace-nowrap ${
-                    isDark
-                      ? 'bg-rose-950/60 border-rose-900/80 text-rose-400 hover:bg-rose-900/60'
-                      : 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
-                  }`}
-                  title="모든 데이터 초기화"
-                >
+                <button type="button" onClick={handleResetAllData} className={`text-xs px-2.5 py-1.5 border rounded-xl font-semibold transition-colors shrink-0 whitespace-nowrap ${isDark ? 'bg-rose-950/60 border-rose-900/80 text-rose-400' : 'bg-rose-50 border-rose-200 text-rose-700'}`}>
                   초기화
                 </button>
               </div>
             </div>
 
-            {/* 메인 레이아웃: 대시보드(최상단) -> [좌: 캐릭터 / 우: 보스목록] */}
+            {/* 메인 레이아웃 */}
             <div className="space-y-6">
 
-              {/* [1. 전체 계정 총 예상 수익 대시보드] */}
-              <div className={`border rounded-2xl p-5 shadow-lg sticky top-2 z-20 backdrop-blur-md transition-colors ${
-                isDark ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200 shadow-md'
-              }`}>
-                <div className="flex items-center justify-between">
-                  <div className="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider flex items-center gap-1.5 flex-wrap">
-                    <span className="whitespace-nowrap">{incomePeriod === 'weekly' ? '전체 계정 주간 총 예상 수익' : '전체 계정 월간 예상 수익'}</span>
-                    <DiffBadge diff={incomePeriod === 'weekly' ? accountDiffWeekly : accountDiffWeekly * 4} />
+              {/* [패치 전후 비교 대시보드] */}
+              <div className={`border rounded-2xl p-5 shadow-lg sticky top-2 z-20 backdrop-blur-md transition-colors ${isDark ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200 shadow-md'}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>⚡ 결정석 패치 전후 총 수익 비교 ({incomePeriod === 'weekly' ? '주간' : '월간'})</span>
                   </div>
                   <div className={`flex items-center p-0.5 rounded-lg border text-[10px] font-bold shrink-0 ${themeInnerBox}`}>
-                    <button
-                      type="button"
-                      onClick={() => setIncomePeriod('weekly')}
-                      className={`px-2.5 py-0.5 rounded-md transition-all ${
-                        incomePeriod === 'weekly'
-                          ? 'bg-emerald-600 text-white shadow'
-                          : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                      }`}
-                    >
-                      주간
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIncomePeriod('monthly')}
-                      className={`px-2.5 py-0.5 rounded-md transition-all ${
-                        incomePeriod === 'monthly'
-                          ? 'bg-emerald-600 text-white shadow'
-                          : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                      }`}
-                    >
-                      월간
-                    </button>
+                    <button type="button" onClick={() => setIncomePeriod('weekly')} className={`px-2.5 py-0.5 rounded-md transition-all ${incomePeriod === 'weekly' ? 'bg-amber-600 text-white shadow' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>주간</button>
+                    <button type="button" onClick={() => setIncomePeriod('monthly')} className={`px-2.5 py-0.5 rounded-md transition-all ${incomePeriod === 'monthly' ? 'bg-amber-600 text-white shadow' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>월간</button>
                   </div>
                 </div>
 
-                <div className="mt-1">
-                  <div className={`text-2xl font-black tracking-tight whitespace-nowrap ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                    {formatMeso(currentCalc.grandTotal)}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* 패치 전 */}
+                  <div className={`p-3.5 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="text-[11px] font-semibold text-sky-400 mb-1">패치 전 총 수익</div>
+                    <div className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatMeso(currentCalc.before)}</div>
                   </div>
-                </div>
 
-                <div className={`grid grid-cols-2 gap-3 mt-3 pt-3 border-t text-xs ${isDark ? 'border-slate-800/80' : 'border-slate-100'}`}>
-                  <div>
-                    <span className={`block text-[11px] whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      전체 결정석 합산 {incomePeriod === 'weekly' ? `(주간 ${currentCalc.soldCount}/90개)` : '(월 환산)'}
-                    </span>
-                    <div className="mt-0.5">
-                      <span className="font-bold text-sm text-sky-500 whitespace-nowrap">{formatMeso(currentCalc.crystalMeso)}</span>
+                  {/* 패치 후 */}
+                  <div className={`p-3.5 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className="text-[11px] font-semibold text-amber-400 mb-1">패치 후 총 수익</div>
+                    <div className={`text-lg font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatMeso(currentCalc.after)}</div>
+                  </div>
+
+                  {/* 증감 비교 및 너프 비율 */}
+                  <div className={`p-3.5 rounded-xl border flex flex-col justify-between ${
+                    currentCalc.diff < 0
+                      ? (isDark ? 'bg-rose-950/30 border-rose-900/50' : 'bg-rose-50 border-rose-200')
+                      : (isDark ? 'bg-emerald-950/30 border-emerald-900/50' : 'bg-emerald-50 border-emerald-200')
+                  }`}>
+                    <div className="text-[11px] font-semibold opacity-80 flex items-center justify-between">
+                      <span>패치 변동액</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-black ${currentCalc.diff < 0 ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                        {currentCalc.percent}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className={`text-base font-black ${currentCalc.diff < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                        {formatMeso(currentCalc.diff)}
+                      </span>
                     </div>
                   </div>
-                  <div>
-                    <span className={`block text-[11px] whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      전체 득템 실 수령액 {incomePeriod === 'monthly' ? '(이번 달)' : '(이번 주)'}
-                    </span>
-                    <span className="font-bold text-sm text-amber-500 mt-0.5 block whitespace-nowrap">{formatMeso(currentCalc.dropMeso)}</span>
-                  </div>
-                </div>
-
-                <div className={`w-full h-2 rounded-full mt-3 overflow-hidden ${isDark ? 'bg-slate-800' : 'bg-slate-200'}`}>
-                  <div
-                    className="bg-sky-500 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${Math.min(100, (currentCalc.soldCount / 90) * 100)}%` }}
-                  ></div>
                 </div>
               </div>
 
-              {/* [2단 배치: 모바일 세로 순차 / PC 좌 4칸 : 우 8칸] */}
+              {/* 2단 배치: 캐릭터 목록 & 보스 목록 */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
-                {/* [2. 보유 캐릭터 목록] */}
+                {/* [보유 캐릭터 목록] */}
                 <div className="lg:col-span-4 space-y-4">
                   <div className={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
                     <div className="text-xs font-extrabold mb-3 flex items-center justify-between">
                       <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>보유 캐릭터 목록 ({characters.length})</span>
-                      <button
-                        type="button"
-                        onClick={() => { setAddMode('api'); setFormError(''); setShowAddCharModal(true); }}
-                        className="text-xs px-2.5 py-1 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold transition-all shadow-sm whitespace-nowrap"
-                      >
+                      <button type="button" onClick={() => { setAddMode('api'); setFormError(''); setShowAddCharModal(true); }} className="text-xs px-2.5 py-1 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold transition-all shadow-sm whitespace-nowrap">
                         + 캐릭터 추가
                       </button>
                     </div>
 
                     {characters.length === 0 ? (
-                      <div className={`text-center py-6 text-xs border border-dashed rounded-xl ${isDark ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-300'}`}>
-                        등록된 캐릭터가 없습니다.
-                      </div>
+                      <div className={`text-center py-6 text-xs border border-dashed rounded-xl ${isDark ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-300'}`}>등록된 캐릭터가 없습니다.</div>
                     ) : (
                       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5 max-h-[500px] overflow-y-auto pr-1 no-scrollbar">
                         {characters.map(c => {
                           const summary = getCharacterSummary(c);
                           const isSelected = activeCharId === c.id;
-                          const charDisplayTotal = incomePeriod === 'weekly' ? summary.weeklyTotal : summary.monthlyTotal;
-                          const charDiff = incomePeriod === 'weekly' ? summary.diffWeekly : summary.diffWeekly * 4;
+                          const charBefore = incomePeriod === 'weekly' ? summary.weeklyBefore : summary.monthlyBefore;
+                          const charAfter = incomePeriod === 'weekly' ? summary.weeklyAfter : summary.monthlyAfter;
+                          const charDiff = charAfter - charBefore;
 
                           return (
-                            <div
-                              key={c.id}
-                              onClick={() => setActiveCharId(c.id)}
-                              className={`w-full p-3 rounded-xl transition-all border cursor-pointer relative flex flex-col justify-between gap-2 ${
-                                isSelected
-                                  ? (isDark ? 'bg-sky-950/80 border-sky-500 text-white shadow-sm' : 'bg-sky-50 border-sky-500 text-sky-900 shadow-sm font-bold')
-                                  : (isDark ? 'bg-slate-900/50 border-slate-800 text-slate-400 hover:bg-slate-800/60' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100')
-                              }`}
-                            >
+                            <div key={c.id} onClick={() => setActiveCharId(c.id)} className={`w-full p-3 rounded-xl transition-all border cursor-pointer relative flex flex-col justify-between gap-2 ${isSelected ? (isDark ? 'bg-sky-950/80 border-sky-500 text-white shadow-sm' : 'bg-sky-50 border-sky-500 text-sky-900 shadow-sm font-bold') : (isDark ? 'bg-slate-900/50 border-slate-800 text-slate-400 hover:bg-slate-800/60' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100')}`}>
                               <div className="flex items-center gap-2.5 truncate w-full pr-6">
                                 {c.image ? (
                                   <img src={c.image} alt="" className="w-9 h-9 rounded-full bg-slate-800 object-cover shrink-0" />
                                 ) : (
-                                  <div className="w-9 h-9 rounded-full bg-sky-600 border border-sky-400 flex items-center justify-center text-xs text-white font-bold shrink-0">
-                                    {c.name.slice(0, 1)}
-                                  </div>
+                                  <div className="w-9 h-9 rounded-full bg-sky-600 border border-sky-400 flex items-center justify-center text-xs text-white font-bold shrink-0">{c.name.slice(0, 1)}</div>
                                 )}
                                 <div className="truncate">
                                   <div className="font-bold text-xs sm:text-sm truncate">{c.name}</div>
@@ -1215,24 +1028,15 @@
                                 </div>
                               </div>
 
-                              <div className="w-full flex items-center justify-between pt-2 border-t border-slate-800/10">
-                                <span className="text-xs sm:text-sm font-black text-sky-500 whitespace-nowrap">
-                                  {formatMeso(charDisplayTotal)}
-                                </span>
+                              <div className="w-full flex items-center justify-between pt-2 border-t border-slate-800/10 text-xs">
+                                <div>
+                                  <span className="text-[10px] text-sky-400">전:{formatMeso(charBefore)}</span>
+                                  <span className="text-[10px] text-amber-400 ml-1.5">후:{formatMeso(charAfter)}</span>
+                                </div>
                                 <DiffBadge diff={charDiff} />
                               </div>
 
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteCharacter(c.id);
-                                }}
-                                className="absolute top-2.5 right-2.5 text-rose-400 hover:text-rose-300 p-1 rounded-md hover:bg-rose-500/25 transition-colors"
-                                title="캐릭터 삭제"
-                              >
-                                ✕
-                              </button>
+                              <button type="button" onClick={(e) => { e.stopPropagation(); deleteCharacter(c.id); }} className="absolute top-2.5 right-2.5 text-rose-400 hover:text-rose-300 p-1 rounded-md" title="캐릭터 삭제">✕</button>
                             </div>
                           );
                         })}
@@ -1241,9 +1045,8 @@
                   </div>
                 </div>
 
-                {/* [3. 보스 체크리스트 및 득템 정산] */}
+                {/* [보스 체크리스트 및 득템 정산] */}
                 <div className="lg:col-span-8 space-y-4">
-
                   {activeChar && (
                     <div className={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
                       <div className="flex items-center justify-between mb-3 text-xs">
@@ -1260,84 +1063,25 @@
                           )}
                           {mainTab === 'drop' && (
                             <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>
-                              전체 등록된 득템: <strong className="text-amber-500 font-bold">{allDrops.length}</strong>개 (득템 등록 캐릭터: <strong className="text-sky-400">{activeChar.name}</strong>)
+                              전체 등록된 득템: <strong className="text-amber-500 font-bold">{allDrops.length}</strong>개
                             </span>
                           )}
                         </div>
                       </div>
 
                       <div className={`grid grid-cols-3 gap-1 p-1 rounded-xl border mb-2 shadow-sm ${themeInnerBox}`}>
-                        <button
-                          type="button"
-                          onClick={() => setMainTab('weekly')}
-                          className={`py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1 ${
-                            mainTab === 'weekly'
-                              ? 'bg-sky-600 text-white shadow'
-                              : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                          }`}
-                        >
-                          <span>📅</span>
-                          <span>주간 보스</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setMainTab('monthly')}
-                          className={`py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1 ${
-                            mainTab === 'monthly'
-                              ? 'bg-purple-600 text-white shadow'
-                              : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                          }`}
-                        >
-                          <span>🌌</span>
-                          <span>월간 보스</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => setMainTab('drop')}
-                          className={`py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1 ${
-                            mainTab === 'drop'
-                              ? 'bg-amber-600 text-white shadow'
-                              : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                          }`}
-                        >
-                          <span>✨</span>
-                          <span>득템 정산</span>
-                        </button>
+                        <button type="button" onClick={() => setMainTab('weekly')} className={`py-2 text-xs font-bold rounded-lg transition-all ${mainTab === 'weekly' ? 'bg-sky-600 text-white shadow' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>주간 보스</button>
+                        <button type="button" onClick={() => setMainTab('monthly')} className={`py-2 text-xs font-bold rounded-lg transition-all ${mainTab === 'monthly' ? 'bg-purple-600 text-white shadow' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>월간 보스</button>
+                        <button type="button" onClick={() => setMainTab('drop')} className={`py-2 text-xs font-bold rounded-lg transition-all ${mainTab === 'drop' ? 'bg-amber-600 text-white shadow' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>득템 정산</button>
                       </div>
-
-                      {mainTab !== 'drop' && (
-                        <div className="flex items-center justify-between px-1 pt-1 text-xs">
-                          <span className={`text-[11px] font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            선택 캐릭터 보스 진행 현황
-                          </span>
-                          <button
-                            type="button"
-                            onClick={resetBossClears}
-                            className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg border flex items-center gap-1 transition-all ${
-                              isDark
-                                ? 'bg-slate-900 border-slate-700 text-amber-400 hover:bg-slate-800'
-                                : 'bg-white border-slate-300 text-amber-700 hover:bg-slate-50 shadow-sm'
-                            }`}
-                          >
-                            <span>🔄</span>
-                            <span>보스 선택 초기화</span>
-                          </button>
-                        </div>
-                      )}
                     </div>
                   )}
 
-                  {/* 컨텐츠 영역 (보스 목록) */}
+                  {/* 보스 목록 렌더링 */}
                   {characters.length === 0 ? (
-                    <div className={`border rounded-2xl p-10 text-center text-xs ${isDark ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-500 shadow-sm'}`}>
-                      등록된 캐릭터가 없습니다. 위쪽의 [캐릭터 추가] 버튼을 눌러 시작해주세요!
-                    </div>
+                    <div className={`border rounded-2xl p-10 text-center text-xs ${isDark ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-500'}`}>등록된 캐릭터가 없습니다.</div>
                   ) : !activeChar ? (
-                    <div className={`border rounded-2xl p-10 text-center text-xs ${isDark ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-500 shadow-sm'}`}>
-                      목록에서 캐릭터를 선택해주세요.
-                    </div>
+                    <div className={`border rounded-2xl p-10 text-center text-xs ${isDark ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-white border-slate-200 text-slate-500'}`}>목록에서 캐릭터를 선택해주세요.</div>
                   ) : (
                     <div>
                       {mainTab === 'weekly' && (
@@ -1345,103 +1089,19 @@
                           {loadingBosses ? (
                             <div className="text-center py-10 text-sm text-slate-500">bosses.csv 로드 중...</div>
                           ) : loadError ? (
-                            <div className="p-4 bg-rose-950/40 border border-rose-900 rounded-xl text-center text-xs text-rose-400">
-                              <code>bosses.csv</code> 파일을 불러올 수 없습니다.
-                            </div>
+                            <div className="p-4 bg-rose-950/40 border border-rose-900 rounded-xl text-center text-xs text-rose-400">bosses.csv 로드 실패</div>
                           ) : (
                             <div className="space-y-4">
                               {weeklyMultiBosses.length > 0 && (
                                 <div className="space-y-2">
-                                  <div className="text-xs font-extrabold text-sky-400 px-1 flex items-center gap-1">
-                                    <span>⚔️</span>
-                                    <span>난이도 선택 보스 ({weeklyMultiBosses.length}종)</span>
-                                  </div>
+                                  <div className="text-xs font-extrabold text-sky-400 px-1">⚔️ 난이도 선택 보스</div>
                                   {weeklyMultiBosses.map(renderBossRow)}
                                 </div>
                               )}
-
                               {weeklySingleBosses.length > 0 && (
                                 <div>
-                                  <div className="text-xs font-extrabold text-slate-400 px-1 mb-2 flex items-center gap-1">
-                                    <span>🛡️</span>
-                                    <span>단일 난이도 보스 ({weeklySingleBosses.length}종)</span>
-                                  </div>
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                                    {weeklySingleBosses.map(bossGroup => {
-                                      const singleVariant = bossGroup.variants[0];
-                                      const variantIds = [singleVariant.id];
-                                      const isSelected = Boolean(activeChar?.clears?.[singleVariant.id]);
-                                      const partySize = isSelected ? (activeChar?.clears?.[singleVariant.id] || 1) : 1;
-                                      const unitPrice = Math.floor(singleVariant.price / partySize);
-
-                                      return (
-                                        <div
-                                          key={bossGroup.name}
-                                          onClick={() => activeChar && selectBossDifficulty(singleVariant, variantIds)}
-                                          className={`p-3 rounded-2xl border transition-all flex items-center justify-between select-none ${
-                                            activeChar ? 'cursor-pointer' : 'cursor-not-allowed'
-                                          } ${
-                                            isSelected
-                                              ? (isDark ? 'bg-slate-900 border-sky-500/80 shadow-md' : 'bg-sky-50/70 border-sky-400 shadow-sm')
-                                              : (isDark ? 'bg-slate-900/50 border-slate-800/80 hover:bg-slate-900/70' : 'bg-white border-slate-200 hover:bg-slate-50')
-                                          }`}
-                                        >
-                                          <div className="flex items-center gap-2.5 truncate">
-                                            <BossImage name={bossGroup.name} isDark={isDark} />
-                                            <div className="truncate">
-                                              <div className="flex items-center gap-1.5">
-                                                <span className={`text-[10px] px-1.5 py-0.5 rounded-lg border font-bold ${getBadgeColor(singleVariant.difficulty, isSelected)}`}>
-                                                  {singleVariant.difficulty}
-                                                </span>
-                                                <span className={`text-sm font-extrabold truncate ${
-                                                  isSelected
-                                                    ? (isDark ? 'text-white' : 'text-sky-950')
-                                                    : (isDark ? 'text-slate-200' : 'text-slate-800')
-                                                }`}>
-                                                  {bossGroup.name}
-                                                </span>
-                                              </div>
-                                              <div className={`text-xs mt-1 whitespace-nowrap ${isSelected ? 'text-sky-500 font-bold' : (isDark ? 'text-slate-400' : 'text-slate-500')}`}>
-                                                {formatMeso(unitPrice)}
-                                              </div>
-                                            </div>
-                                          </div>
-
-                                          <div className="flex items-center gap-1.5 shrink-0 ml-1">
-                                            {isSelected && (
-                                              <div
-                                                onClick={e => e.stopPropagation()}
-                                                className={`flex items-center px-1.5 py-0.5 rounded-lg border text-xs ${themeInnerBox}`}
-                                              >
-                                                <button
-                                                  type="button"
-                                                  onClick={() => setBossPartySize(singleVariant.id, partySize - 1)}
-                                                  className="w-5 h-5 rounded flex items-center justify-center font-bold"
-                                                >
-                                                  -
-                                                </button>
-                                                <span className="px-1 text-sky-500 font-bold whitespace-nowrap">{partySize}</span>
-                                                <button
-                                                  type="button"
-                                                  onClick={() => setBossPartySize(singleVariant.id, partySize + 1)}
-                                                  className="w-5 h-5 rounded flex items-center justify-center font-bold"
-                                                >
-                                                  +
-                                                </button>
-                                              </div>
-                                            )}
-                                            <div className={`w-5 h-5 rounded-lg flex items-center justify-center text-xs font-black ${
-                                              isSelected
-                                                ? 'bg-sky-500 text-slate-950 shadow-sm'
-                                                : (isDark ? 'border border-slate-700' : 'border border-slate-300')
-                                            }`}>
-                                              {isSelected && '✓'}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
+                                  <div className="text-xs font-extrabold text-slate-400 px-1 mb-2">🛡️ 단일 난이도 보스</div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">{weeklySingleBosses.map(renderBossRow)}</div>
                                 </div>
                               )}
                             </div>
@@ -1450,254 +1110,20 @@
                       )}
 
                       {mainTab === 'monthly' && (
-                        <div>
-                          {loadingBosses ? (
-                            <div className="text-center py-10 text-sm text-slate-500">bosses.csv 로드 중...</div>
-                          ) : loadError ? (
-                            <div className="p-4 bg-rose-950/40 border border-rose-900 rounded-xl text-center text-xs text-rose-400">
-                              <code>bosses.csv</code> 파일을 불러올 수 없습니다.
-                            </div>
-                          ) : (
-                            <div className="space-y-3">
-                              <div className="p-3 bg-purple-950/20 border border-purple-800/30 rounded-2xl text-xs text-purple-300 flex items-center gap-2">
-                                <span>💡</span>
-                                <span>월간 보스는 주간 12개 제한을 소모하지 않으며 월 환산 수익에 반영됩니다.</span>
-                              </div>
-                              {monthlyBosses.map(renderBossRow)}
-                            </div>
-                          )}
+                        <div className="space-y-3">
+                          <div className="p-3 bg-purple-950/20 border border-purple-800/30 rounded-2xl text-xs text-purple-300">💡 월간 보스 패치 전후 비교 뷰</div>
+                          {monthlyBosses.map(renderBossRow)}
                         </div>
                       )}
 
                       {mainTab === 'drop' && (
-                        <div className={`border rounded-2xl p-5 shadow-sm transition-colors ${
-                          isDark ? 'bg-slate-900 border-amber-500/30' : 'bg-white border-amber-400/40 shadow-md'
-                        }`}>
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-amber-500 text-base">✨</span>
-                              <span className={`text-sm font-bold ${isDark ? 'text-amber-300' : 'text-amber-800'}`}>
-                                보스 득템 분배 계산기 (전체 통합)
-                              </span>
-                            </div>
-                            {totalDropSumAll > 0 && (
-                              <span className="text-xs font-bold text-amber-500 whitespace-nowrap">
-                                누적총액: {formatMeso(totalDropSumAll)}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className={`text-xs px-3 py-2 rounded-xl border mb-3.5 flex items-center justify-between ${themeInnerBox}`}>
-                            <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>현재 득템 등록 캐릭터:</span>
-                            <span className="font-bold text-sky-400 text-sm">{activeChar ? activeChar.name : '선택된 캐릭터 없음'}</span>
-                          </div>
-
-                          <div className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border mb-3.5 ${themeInnerBox}`}>
-                            <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                              <input
-                                type="checkbox"
-                                checked={isMvpOrPc}
-                                onChange={e => toggleMvpBenefit(e.target.checked)}
-                                className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                              />
-                              <span className={`text-xs font-medium ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                                MVP 실버 이상 또는 PC방 혜택
-                              </span>
-                            </label>
-                            <span className={`text-[11px] font-bold px-2 py-0.5 rounded whitespace-nowrap ${
-                              isDark
-                                ? (isMvpOrPc ? 'bg-amber-950 text-amber-400 border border-amber-800/50' : 'bg-slate-800 text-slate-400')
-                                : (isMvpOrPc ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-slate-200 text-slate-600')
-                            }`}>
-                              수수료 {isMvpOrPc ? '3%' : '5%'}
-                            </span>
-                          </div>
-
+                        <div className={`border rounded-2xl p-5 ${isDark ? 'bg-slate-900 border-amber-500/30' : 'bg-white border-amber-400/40'}`}>
+                          <div className="text-sm font-bold text-amber-500 mb-3">✨ 보스 득템 분배 계산기</div>
                           <form onSubmit={handleAddDrop} className="space-y-3">
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="text"
-                                placeholder="아이템 이름 (예: 마깃안, 거공)"
-                                value={dropItemName}
-                                onChange={e => setDropItemName(e.target.value)}
-                                className={`border rounded-xl px-3.5 py-2 text-xs flex-1 min-w-0 focus:outline-none focus:border-amber-500 ${themeInnerInput}`}
-                              />
-                              <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs shrink-0 ${themeInnerBox}`}>
-                                <input
-                                  type="date"
-                                  value={dropDate}
-                                  onChange={e => setDropDate(e.target.value)}
-                                  className={`border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-amber-500 ${
-                                    isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
-                                  }`}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setDropDate(getTodayString())}
-                                  className={`text-[11px] px-2 py-1 rounded-lg border shrink-0 whitespace-nowrap ${
-                                    isDark ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700' : 'bg-slate-200 border-slate-300 text-slate-700 hover:bg-slate-300'
-                                  }`}
-                                >
-                                  오늘
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className={`border rounded-2xl p-3.5 space-y-3 ${themeInnerBox}`}>
-                              <div>
-                                <div className="flex items-center justify-between mb-1.5 px-1">
-                                  <label className={`text-xs font-bold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>판매 금액</label>
-                                  <span className={`text-xs font-extrabold whitespace-nowrap ${currentInputPrice > 0 ? 'text-amber-500' : (isDark ? 'text-slate-500' : 'text-slate-400')}`}>
-                                    {currentInputPrice > 0 ? `= ${formatMeso(currentInputPrice)}` : '0 메소'}
-                                  </span>
-                                </div>
-                                <input
-                                  type="text"
-                                  inputMode="numeric"
-                                  pattern="[0-9,]*"
-                                  placeholder="판매 금액을 직접 입력하거나 아래 버튼을 누르세요"
-                                  value={dropItemPriceRaw}
-                                  onChange={e => {
-                                    const clean = e.target.value.replace(/[^0-9]/g, '');
-                                    if (!clean) {
-                                      setDropItemPriceRaw('');
-                                    } else {
-                                      setDropItemPriceRaw(parseInt(clean, 10).toLocaleString());
-                                    }
-                                  }}
-                                  className={`w-full border rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-amber-500 text-right font-mono text-sm ${themeInnerInput}`}
-                                />
-                              </div>
-
-                              <div className="space-y-1.5 pt-1">
-                                <div className="text-[11px] text-slate-400 px-1 font-medium">빠른 금액 누적 추가</div>
-                                <div className="grid grid-cols-3 sm:flex sm:flex-wrap gap-1.5">
-                                  <button type="button" onClick={() => addQuickAmount(1000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-900 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+100만</button>
-                                  <button type="button" onClick={() => addQuickAmount(5000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-900 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+500만</button>
-                                  <button type="button" onClick={() => addQuickAmount(10000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+1천만</button>
-
-                                  <button type="button" onClick={() => addQuickAmount(50000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-white border-slate-300 text-slate-700'}`}>+5천만</button>
-                                  <button type="button" onClick={() => addQuickAmount(100000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+1억</button>
-                                  <button type="button" onClick={() => addQuickAmount(500000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+5억</button>
-
-                                  <button type="button" onClick={() => addQuickAmount(1000000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+10억</button>
-                                  <button type="button" onClick={() => addQuickAmount(5000000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+50억</button>
-                                  <button type="button" onClick={() => addQuickAmount(10000000000)} className={`text-xs py-2 sm:px-2.5 sm:py-1 rounded-lg text-center whitespace-nowrap active:scale-95 transition-all border ${isDark ? 'bg-amber-950/60 text-amber-300 border-amber-800/40' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>+100억</button>
-                                </div>
-                              </div>
-
-                              {currentInputPrice > 0 && (
-                                <div className="flex justify-end pt-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => setDropItemPriceRaw('')}
-                                    className={`text-xs px-3 py-1 rounded-lg font-bold border transition-colors whitespace-nowrap ${
-                                      isDark ? 'bg-rose-950/60 border-rose-900/80 text-rose-300' : 'bg-rose-50 border-rose-200 text-rose-700'
-                                    }`}
-                                  >
-                                    금액 비우기
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-
-                            <div className={`flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl border text-xs ${themeInnerBox}`}>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className={`text-xs whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>수수료:</span>
-                                <select
-                                  value={dropTaxRate}
-                                  onChange={e => setDropTaxRate(Number(e.target.value))}
-                                  className={`border text-xs rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500 ${
-                                    isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'
-                                  }`}
-                                >
-                                  <option value={3}>3% (MVP/PC)</option>
-                                  <option value={5}>5% (일반)</option>
-                                </select>
-                              </div>
-
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className="text-xs font-semibold text-amber-500 whitespace-nowrap">분배:</span>
-                                <select
-                                  value={dropPartyCount}
-                                  onChange={e => setDropPartyCount(Number(e.target.value))}
-                                  className={`border text-xs font-bold rounded-lg px-2 py-1.5 focus:outline-none focus:border-amber-500 ${
-                                    isDark ? 'bg-slate-900 border-amber-600/50 text-white' : 'bg-white border-amber-400 text-slate-800'
-                                  }`}
-                                >
-                                  <option value={1}>1인</option>
-                                  <option value={2}>2인</option>
-                                  <option value={3}>3인</option>
-                                  <option value={4}>4인</option>
-                                  <option value={5}>5인</option>
-                                  <option value={6}>6인</option>
-                                </select>
-                              </div>
-
-                              <button
-                                type="submit"
-                                className="bg-amber-600 hover:bg-amber-500 px-4 py-1.5 rounded-lg font-bold text-white transition-colors shadow-sm shrink-0 ml-auto whitespace-nowrap"
-                              >
-                                등록
-                              </button>
-                            </div>
-
-                            {currentInputPrice > 0 && (
-                              <div className={`text-xs border px-3.5 py-2 rounded-xl flex justify-between items-center ${
-                                isDark ? 'text-amber-300 bg-amber-950/20 border-amber-900/30' : 'text-amber-900 bg-amber-50 border-amber-200'
-                              }`}>
-                                <span className="whitespace-nowrap">내 몫 (실 수령액):</span>
-                                <span className="font-bold text-base text-amber-500 whitespace-nowrap">{formatMeso(previewMyShare)}</span>
-                              </div>
-                            )}
+                            <input type="text" placeholder="아이템 이름" value={dropItemName} onChange={e => setDropItemName(e.target.value)} className={`border rounded-xl px-3 py-2 text-xs w-full ${themeInnerInput}`} />
+                            <input type="text" placeholder="판매 금액" value={dropItemPriceRaw} onChange={e => setDropItemPriceRaw(e.target.value.replace(/[^0-9]/g, '').replace(/\B(?=(\d{3})+(?!\d))/g, ','))} className={`border rounded-xl px-3 py-2 text-xs w-full font-mono ${themeInnerInput}`} />
+                            <button type="submit" className="bg-amber-600 hover:bg-amber-500 px-4 py-2 rounded-lg font-bold text-white text-xs w-full">득템 등록</button>
                           </form>
-
-                          <div className={`mt-5 pt-3.5 border-t ${isDark ? 'border-slate-800/80' : 'border-slate-200'}`}>
-                            <div className={`text-xs font-bold mb-2.5 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                              전체 통합 득템 내역 ({allDrops.length}건)
-                            </div>
-                            {allDrops.length > 0 ? (
-                              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 no-scrollbar">
-                                {allDrops.map(drop => (
-                                  <div
-                                    key={drop.id}
-                                    className={`flex items-center justify-between border px-3.5 py-2.5 rounded-xl text-xs ${themeInnerBox}`}
-                                  >
-                                    <div>
-                                      <div className="flex items-center gap-2 flex-wrap">
-                                        <span className={`font-bold ${isDark ? 'text-slate-100' : 'text-slate-900'}`}>{drop.name}</span>
-                                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-600 text-white font-bold">
-                                          {drop.charName}
-                                        </span>
-                                        <span className={`text-[10px] px-1.5 py-0.5 rounded ${isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600'}`}>
-                                          {drop.date || '날짜 미기재'}
-                                        </span>
-                                      </div>
-                                      <div className={`text-[11px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                                        원가 {formatMeso(drop.originalPrice)} · 수수료 {drop.taxRate}% · {drop.partyCount}인 분배
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-2.5 shrink-0">
-                                      <span className="text-amber-500 font-bold whitespace-nowrap">{formatMeso(drop.price)}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteDrop(drop.charId, drop.id)}
-                                        className="text-rose-500 hover:text-rose-400 text-xs p-1"
-                                      >
-                                        ✕
-                                      </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className={`text-center py-6 text-xs border border-dashed rounded-xl ${
-                                isDark ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-300'
-                              }`}>
-                                등록된 득템 아이템이 없습니다.
-                              </div>
-                            )}
-                          </div>
                         </div>
                       )}
                     </div>
@@ -1707,279 +1133,37 @@
               </div>
             </div>
 
-            {/* 하단 푸터 */}
-            <div className="mt-10 pt-4 border-t border-slate-800/60 text-center text-[11px] text-slate-500 space-y-1">
-              <div>메이플스토리 보스 수익 및 득템 정산 계산기</div>
-              <div>
-                <a
-                  href="https://github.com/Global-YDH/Maple-Calculator"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:underline text-sky-500 font-medium"
-                >
-                  💻 GitHub Repository (소스코드 및 안내)
-                </a>
-              </div>
+            {/* 푸터 */}
+            <div className="mt-10 pt-4 border-t border-slate-800/60 text-center text-[11px] text-slate-500">
+              <a href="https://github.com/Global-YDH/Maple-Calculator" target="_blank" rel="noopener noreferrer" className="text-sky-500 font-medium">💻 GitHub Repository</a>
             </div>
 
-            {/* 캐릭터 추가 모달 */}
+            {/* 모달들 */}
             {showAddCharModal && (
-              <div
-                onClick={() => setShowAddCharModal(false)}
-                className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
-              >
-                <div
-                  onClick={e => e.stopPropagation()}
-                  className={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl relative ${themeCard}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCharModal(false)}
-                    className={`absolute top-4 right-4 p-1 rounded-lg text-sm leading-none transition-colors ${
-                      isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                    title="닫기"
-                  >
-                    ✕
-                  </button>
-
-                  <h3 className={`text-sm font-bold mb-3 pr-6 ${isDark ? 'text-white' : 'text-slate-900'}`}>캐릭터 추가</h3>
-
-                  <div className="flex gap-2 mb-3">
-                    <button
-                      type="button"
-                      onClick={() => { setAddMode('api'); setFormError(''); }}
-                      className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-colors ${
-                        addMode === 'api'
-                          ? 'bg-sky-600 text-white shadow'
-                          : (isDark ? 'bg-slate-800/70 text-slate-400' : 'bg-slate-200/80 text-slate-600')
-                      }`}
-                    >
-                      API 자동 조회
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setAddMode('manual'); setFormError(''); }}
-                      className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-colors ${
-                        addMode === 'manual'
-                          ? 'bg-slate-800/70 text-slate-400'
-                          : (isDark ? 'bg-slate-800/70 text-slate-400' : 'bg-slate-200/80 text-slate-600')
-                      }`}
-                    >
-                      수동 직접 입력
-                    </button>
-                  </div>
-
-                  {addMode === 'api' ? (
-                    <form onSubmit={handleApiAdd}>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          placeholder="캐릭터 닉네임 입력"
-                          value={searchName}
-                          onChange={e => setSearchName(e.target.value)}
-                          disabled={isSearching}
-                          className={`border rounded-xl px-3.5 py-2 text-xs flex-1 focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
-                        />
-                        <button
-                          type="submit"
-                          disabled={isSearching}
-                          className="bg-sky-600 hover:bg-sky-500 disabled:bg-slate-400 px-4 py-2 rounded-xl text-xs font-bold text-white transition-colors whitespace-nowrap"
-                        >
-                          {isSearching ? '조회중...' : '추가'}
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <form onSubmit={handleManualAdd} className="space-y-2">
-                      <div className="grid grid-cols-12 gap-2">
-                        <input
-                          type="text"
-                          placeholder="닉네임"
-                          value={manualName}
-                          onChange={e => setManualName(e.target.value)}
-                          className={`col-span-5 border rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
-                        />
-                        <input
-                          type="text"
-                          placeholder="직업"
-                          value={manualJob}
-                          onChange={e => setManualJob(e.target.value)}
-                          className={`col-span-4 border rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-sky-500 ${themeInnerInput}`}
-                        />
-                        <input
-                          type="number"
-                          placeholder="레벨"
-                          value={manualLevel}
-                          onChange={e => setManualLevel(e.target.value)}
-                          className={`col-span-3 border rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-sky-500 text-center ${themeInnerInput}`}
-                        />
-                      </div>
-                      <button
-                        type="submit"
-                        className={`w-full py-2 rounded-xl text-xs font-bold border transition-colors ${
-                          isDark
-                            ? 'bg-slate-800 hover:bg-slate-700 text-sky-400 border-slate-700'
-                            : 'bg-slate-100 hover:bg-slate-200 text-sky-600 border-slate-300'
-                        }`}
-                      >
-                        캐릭터 추가 완료
-                      </button>
-                    </form>
-                  )}
-
-                  {formError && <p className="text-[11px] text-rose-500 mt-2 px-1">{formError}</p>}
+              <div onClick={() => setShowAddCharModal(false)} className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+                <div onClick={e => e.stopPropagation()} className={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl relative ${themeCard}`}>
+                  <button type="button" onClick={() => setShowAddCharModal(false)} className="absolute top-4 right-4 text-xs">✕</button>
+                  <h3 className="text-sm font-bold mb-3">캐릭터 추가</h3>
+                  <form onSubmit={handleApiAdd} className="space-y-2">
+                    <input type="text" placeholder="닉네임 입력" value={searchName} onChange={e => setSearchName(e.target.value)} className={`border rounded-xl px-3 py-2 text-xs w-full ${themeInnerInput}`} />
+                    <button type="submit" className="w-full bg-sky-600 text-white rounded-xl py-2 text-xs font-bold">API 조회 추가</button>
+                  </form>
                 </div>
               </div>
             )}
 
-            {/* 계정 연동 및 백업 모달 */}
             {showSyncModal && (
-              <div
-                onClick={() => setShowSyncModal(false)}
-                className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50"
-              >
-                <div
-                  onClick={e => e.stopPropagation()}
-                  className={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl relative ${themeCard}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setShowSyncModal(false)}
-                    className={`absolute top-4 right-4 p-1 rounded-lg text-sm leading-none transition-colors ${
-                      isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-                    }`}
-                    title="닫기"
-                  >
-                    ✕
-                  </button>
-
-                  <h3 className={`text-sm font-bold mb-1 pr-6 ${isDark ? 'text-white' : 'text-slate-900'}`}>클라우드 계정 연동</h3>
-                  <p className={`text-[11px] mb-3 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    기기 간 데이터 연동 및 주차별 보스 수익 비교를 위한 계정 관리 메뉴입니다.
-                  </p>
-
-                  <div className={`grid grid-cols-3 gap-1 p-1 rounded-xl border mb-3 ${themeInnerBox}`}>
-                    <button
-                      type="button"
-                      onClick={() => setSyncMode('register')}
-                      className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${
-                        syncMode === 'register'
-                          ? 'bg-sky-600 text-white shadow'
-                          : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                      }`}
-                    >
-                      계정 만들기
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSyncMode('login')}
-                      className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${
-                        syncMode === 'login'
-                          ? 'bg-sky-600 text-white shadow'
-                          : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800')
-                      }`}
-                    >
-                      로그인
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSyncMode('delete')}
-                      className={`py-1.5 text-[11px] font-bold rounded-lg transition-all ${
-                        syncMode === 'delete'
-                          ? 'bg-rose-600 text-white shadow'
-                          : (isDark ? 'text-rose-400 hover:text-rose-200' : 'text-rose-500 hover:text-rose-800')
-                      }`}
-                    >
-                      계정 삭제
-                    </button>
-                  </div>
-
-                  <div className="space-y-2 mb-4">
-                    <div>
-                      <label className={`block text-[10px] font-bold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>동기화 ID</label>
-                      <input
-                        type="text"
-                        placeholder="동기화 ID 입력"
-                        value={tempSyncId}
-                        onChange={e => setTempSyncId(e.target.value)}
-                        className={`w-full border rounded-xl px-3 py-2 text-xs focus:outline-none ${
-                          syncMode === 'delete' ? 'focus:border-rose-500' : 'focus:border-sky-500'
-                        } ${themeInnerInput}`}
-                      />
-                    </div>
-                    <div>
-                      <label className={`block text-[10px] font-bold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>비밀번호 (PIN)</label>
-                      <input
-                        type="password"
-                        placeholder="비밀번호 입력"
-                        value={tempSyncPassword}
-                        onChange={e => setTempSyncPassword(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            handleSyncSubmit();
-                          }
-                        }}
-                        className={`w-full border rounded-xl px-3 py-2 text-xs focus:outline-none ${
-                          syncMode === 'delete' ? 'focus:border-rose-500' : 'focus:border-sky-500'
-                        } ${themeInnerInput}`}
-                      />
-                    </div>
-                  </div>
-
-                  {syncMode === 'delete' && (
-                    <div className="mb-4 p-2.5 rounded-xl bg-rose-950/30 border border-rose-900/50 text-[11px] text-rose-400 leading-relaxed">
-                      ⚠️ 계정을 삭제하면 클라우드에 저장된 모든 캐릭터, 보스 체크 데이터 및 주차별 히스토리가 영구히 삭제됩니다.
-                    </div>
-                  )}
-
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowSyncModal(false)}
-                      className={`px-3 py-2 rounded-xl text-xs font-medium ${
-                        isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-300' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
-                      }`}
-                    >
-                      취소
-                    </button>
-
-                    {syncId && syncMode !== 'delete' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (confirm('클라우드 연동을 해제하고 로컬 모드로 전환하시겠습니까? (서버 데이터는 유지됩니다)')) {
-                            localStorage.removeItem('maple_sync_id');
-                            localStorage.removeItem('maple_sync_pw');
-                            setSyncId('');
-                            setSyncPassword('');
-                            setSyncStatus('로컬 모드 (저장됨)');
-                            setShowSyncModal(false);
-                          }
-                        }}
-                        className={`py-2 px-3 rounded-xl text-xs font-medium whitespace-nowrap ${
-                          isDark ? 'bg-slate-800 text-rose-400 hover:bg-slate-700' : 'bg-slate-200 text-rose-600 hover:bg-slate-300'
-                        }`}
-                      >
-                        연동 해제
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleSyncSubmit}
-                      className={`flex-1 py-2 rounded-xl text-xs font-bold text-white transition-colors whitespace-nowrap ${
-                        syncMode === 'delete'
-                          ? 'bg-rose-600 hover:bg-rose-500'
-                          : 'bg-sky-600 hover:bg-sky-500'
-                      }`}
-                    >
-                      {syncMode === 'register' ? '계정 생성 및 연동' : syncMode === 'login' ? '로그인 및 불러오기' : '영구 삭제'}
-                    </button>
-                  </div>
+              <div onClick={() => setShowSyncModal(false)} className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+                <div onClick={e => e.stopPropagation()} className={`border rounded-2xl p-5 max-w-sm w-full shadow-2xl relative ${themeCard}`}>
+                  <button type="button" onClick={() => setShowSyncModal(false)} className="absolute top-4 right-4 text-xs">✕</button>
+                  <h3 className="text-sm font-bold mb-3">클라우드 계정 연동</h3>
+                  <input type="text" placeholder="동기화 ID" value={tempSyncId} onChange={e => setTempSyncId(e.target.value)} className={`border rounded-xl px-3 py-2 text-xs w-full mb-2 ${themeInnerInput}`} />
+                  <input type="password" placeholder="비밀번호" value={tempSyncPassword} onChange={e => setTempSyncPassword(e.target.value)} className={`border rounded-xl px-3 py-2 text-xs w-full mb-3 ${themeInnerInput}`} />
+                  <button type="button" onClick={handleSyncSubmit} className="w-full bg-sky-600 text-white rounded-xl py-2 text-xs font-bold">확인</button>
                 </div>
               </div>
             )}
+
           </div>
         </div>
       );
