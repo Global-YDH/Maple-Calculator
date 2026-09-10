@@ -557,6 +557,7 @@
 
       const totalDropSumAll = allDrops.reduce((sum, d) => sum + d.price, 0);
 
+      // 1. 전체 계정 통합 수익 계산
       const calculation = useMemo(() => {
         const bossMap = Object.fromEntries(bossList.map(b => [b.id, b]));
         const candidateWeeklyCrystals = [];
@@ -639,6 +640,60 @@
 
       const activeChar = characters.find(c => c.id === activeCharId);
       const bossMap = useMemo(() => Object.fromEntries(bossList.map(b => [b.id, b])), [bossList]);
+
+      // 2. 현재 선택된 캐릭터 개별 수익 계산
+      const activeCharCalc = useMemo(() => {
+        if (!activeChar) return { crystalWeekly: 0, crystalMonthly: 0, dropMeso: 0, grandTotal: 0, weeklyCount: 0 };
+
+        let crystalWeeklyList = [];
+        let crystalMonthly = 0;
+
+        Object.entries(activeChar.clears || {}).forEach(([bId, partySize]) => {
+          const boss = bossMap[bId];
+          if (!boss) return;
+          const unitPrice = Math.floor(boss.price / partySize);
+
+          if (boss.cycle === 'monthly') {
+            crystalMonthly += unitPrice;
+          } else if (boss.cycle === 'weekly') {
+            crystalWeeklyList.push(unitPrice);
+          }
+        });
+
+        crystalWeeklyList.sort((a, b) => b - a);
+        const crystalWeekly = crystalWeeklyList.slice(0, 12).reduce((sum, p) => sum + p, 0);
+
+        const now = new Date();
+        const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        const currentThursdayTime = getCurrentThursdayResetTime();
+        const currentWednesdayEndTime = currentThursdayTime + (7 * 24 * 60 * 60 * 1000) - 1000;
+
+        let charDropWeekly = 0;
+        let charDropMonthly = 0;
+
+        (activeChar.drops || []).forEach(d => {
+          const dropTime = new Date((d.date || getTodayString()) + 'T00:00:00').getTime();
+          if (dropTime >= currentThursdayTime && dropTime <= currentWednesdayEndTime) {
+            charDropWeekly += d.price;
+          }
+          const dropYm = (d.date || '').slice(0, 7);
+          if (dropYm === currentYearMonth) {
+            charDropMonthly += d.price;
+          }
+        });
+
+        const selectedDropMeso = incomePeriod === 'weekly' ? charDropWeekly : charDropMonthly;
+        const totalWeekly = crystalWeekly + charDropWeekly;
+        const totalMonthly = (crystalWeekly * 4) + crystalMonthly + charDropMonthly;
+
+        return {
+          crystalWeekly,
+          crystalMonthly,
+          dropMeso: selectedDropMeso,
+          grandTotal: incomePeriod === 'weekly' ? totalWeekly : totalMonthly,
+          weeklyCount: crystalWeeklyList.length
+        };
+      }, [activeChar, bossMap, incomePeriod]);
 
       const activeCharWeeklyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'weekly').length;
       const activeCharMonthlyCount = Object.keys(activeChar?.clears || {}).filter(bId => bossMap[bId]?.cycle === 'monthly').length;
@@ -1091,13 +1146,13 @@
               {/* 우측 패널: 대시보드 및 메인 컨텐츠 영역 */}
               <div class="lg:col-span-8 space-y-4">
 
-                {/* 대시보드 */}
+                {/* 1. 최상단 메인 대시보드 (계정 전체 통합 수익) */}
                 <div class={`border rounded-2xl p-5 shadow-lg sticky top-2 z-20 backdrop-blur-md transition-colors ${
                   isDark ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200 shadow-md'
                 }`}>
                   <div class="flex items-center justify-between">
                     <div class="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider">
-                      {incomePeriod === 'weekly' ? '주간 총 예상 수익 (주간+이번 주 득템)' : '월간 예상 수익 (주간 4주+월간+이번 달 득템)'}
+                      {incomePeriod === 'weekly' ? '전체 계정 총 예상 수익 (주간+이번 주 득템)' : '전체 계정 월간 예상 수익 (주간 4주+월간+이번 달 득템)'}
                     </div>
                     <div class={`flex items-center p-0.5 rounded-lg border text-[10px] font-bold ${themeInnerBox}`}>
                       <button
@@ -1132,13 +1187,13 @@
                   <div class={`grid grid-cols-2 gap-3 mt-3 pt-3 border-t text-xs ${isDark ? 'border-slate-800/80' : 'border-slate-100'}`}>
                     <div>
                       <span class={`block text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                        결정석 합산 {incomePeriod === 'weekly' ? `(주간 ${currentCalc.soldCount}/90개)` : '(월 환산)'}
+                        전체 결정석 합산 {incomePeriod === 'weekly' ? `(주간 ${currentCalc.soldCount}/90개)` : '(월 환산)'}
                       </span>
                       <span class="font-bold text-sm text-sky-500">{formatMeso(currentCalc.crystalMeso)}</span>
                     </div>
                     <div>
                       <span class={`block text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                        득템 실 수령액 {incomePeriod === 'monthly' ? '(이번 달)' : '(이번 주)'}
+                        전체 득템 실 수령액 {incomePeriod === 'monthly' ? '(이번 달)' : '(이번 주)'}
                       </span>
                       <span class="font-bold text-sm text-amber-500">{formatMeso(currentCalc.dropMeso)}</span>
                     </div>
@@ -1151,6 +1206,77 @@
                     ></div>
                   </div>
                 </div>
+
+                {/* 2. 선택된 캐릭터 전용 개별 수익 요약 카드 (주간 모드일 때는 월간 결정석 제외) */}
+                {activeChar && (
+                  <div class={`border rounded-2xl p-4 transition-colors ${
+                    isDark ? 'bg-slate-900/80 border-sky-500/40 shadow-sm' : 'bg-sky-50/60 border-sky-200 shadow-sm'
+                  }`}>
+                    <div class="flex items-center justify-between mb-2.5">
+                      <div class="flex items-center gap-2">
+                        <span class="text-xs font-black px-2.5 py-0.5 rounded-lg bg-sky-600 text-white shadow-sm">
+                          {activeChar.name}
+                        </span>
+                        <span class={`text-xs font-extrabold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                          캐릭터 개별 예상 수익 ({incomePeriod === 'weekly' ? '주간' : '월간'})
+                        </span>
+                      </div>
+                      <span class="text-base font-black text-sky-500">
+                        {formatMeso(activeCharCalc.grandTotal)}
+                      </span>
+                    </div>
+
+                    {incomePeriod === 'weekly' ? (
+                      /* 주간 모드: 주간 결정석과 캐릭터 득템액만 2분할 표시 */
+                      <div class={`grid grid-cols-2 gap-2 pt-2.5 border-t text-[11px] ${isDark ? 'border-slate-800' : 'border-sky-100'}`}>
+                        <div>
+                          <span class={`block text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            주간 결정석 ({Math.min(12, activeCharCalc.weeklyCount)}/12개)
+                          </span>
+                          <span class={`font-bold text-xs ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                            {formatMeso(activeCharCalc.crystalWeekly)}
+                          </span>
+                        </div>
+                        <div>
+                          <span class={`block text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            캐릭터 몫 득템액 (이번 주)
+                          </span>
+                          <span class="font-bold text-xs text-amber-500">
+                            {formatMeso(activeCharCalc.dropMeso)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      /* 월간 모드: 주간(4주 환산) + 월간 결정석 + 월간 득템액 3분할 표시 */
+                      <div class={`grid grid-cols-3 gap-2 pt-2.5 border-t text-[11px] ${isDark ? 'border-slate-800' : 'border-sky-100'}`}>
+                        <div>
+                          <span class={`block text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            주간 결정석 (4주 환산)
+                          </span>
+                          <span class={`font-bold text-xs ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+                            {formatMeso(activeCharCalc.crystalWeekly * 4)}
+                          </span>
+                        </div>
+                        <div>
+                          <span class={`block text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            월간 결정석
+                          </span>
+                          <span class="font-bold text-xs text-purple-400">
+                            {formatMeso(activeCharCalc.crystalMonthly)}
+                          </span>
+                        </div>
+                        <div>
+                          <span class={`block text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                            캐릭터 몫 득템액 (이번 달)
+                          </span>
+                          <span class="font-bold text-xs text-amber-500">
+                            {formatMeso(activeCharCalc.dropMeso)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* 현재 선택된 캐릭터 정보 및 3분할 탭 바 */}
                 {activeChar && (
@@ -1423,7 +1549,7 @@
                         </div>
 
                         <form onSubmit={handleAddDrop} class="space-y-3">
-                          {/* 1. 기본 정보 (모바일에서도 1줄 나란히 컴팩트 배치: 이름 + 획득일) */}
+                          {/* 1. 기본 정보 */}
                           <div class="flex items-center gap-2">
                             <input
                               type="text"
@@ -1453,7 +1579,7 @@
                             </div>
                           </div>
 
-                          {/* 2. 판매 금액 통합 입력 영역 (직접 입력창 + 실시간 한글 금액 + 빠른 3x3 버튼 모음) */}
+                          {/* 2. 판매 금액 통합 입력 영역 */}
                           <div class={`border rounded-2xl p-3.5 space-y-3 ${themeInnerBox}`}>
                             <div>
                               <div class="flex items-center justify-between mb-1.5 px-1">
@@ -1480,7 +1606,7 @@
                               />
                             </div>
 
-                            {/* 빠른 금액 추가 버튼: 모바일 3분할(3x3) 완벽 정렬 */}
+                            {/* 빠른 금액 추가 버튼 */}
                             <div class="space-y-1.5 pt-1">
                               <div class="text-[11px] text-slate-400 px-1 font-medium">빠른 금액 누적 추가</div>
                               <div class="grid grid-cols-3 sm:flex sm:flex-wrap gap-1.5">
