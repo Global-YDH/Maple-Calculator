@@ -10,8 +10,6 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Supabase JS CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     body { -webkit-tap-highlight-color: transparent; }
     input, select, button { -webkit-user-select: auto; user-select: auto; }
@@ -26,7 +24,17 @@
     const { useState, useEffect, useMemo, useRef } = React;
 
     const DEFAULT_SB_URL = 'https://pmudomjxhvmnvusfnqhn.supabase.co';
-    const DEFAULT_SB_KEY = 'sb_publishable_Efv0hHxppj1qBZmAU6PjJQ_Ua6dwlPj';
+
+    async function requestSyncApi(action, id, password, data = null) {
+      const res = await fetch(`${DEFAULT_SB_URL}/functions/v1/sync-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, id, password, data })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || '요청 처리에 실패했습니다.');
+      return json;
+    }
 
     function getTodayString() {
       const d = new Date();
@@ -182,18 +190,6 @@
       const [tempSyncPassword, setTempSyncPassword] = useState('');
       const [syncStatus, setSyncStatus] = useState('로컬 모드 (저장됨)');
 
-      const supabaseRef = useRef(null);
-
-      useEffect(() => {
-        if (DEFAULT_SB_URL && DEFAULT_SB_KEY && window.supabase) {
-          try {
-            supabaseRef.current = window.supabase.createClient(DEFAULT_SB_URL, DEFAULT_SB_KEY);
-          } catch (e) {
-            console.error('Supabase init error:', e);
-          }
-        }
-      }, []);
-
       const [mainTab, setMainTab] = useState('weekly');
       const [incomePeriod, setIncomePeriod] = useState('weekly');
 
@@ -235,68 +231,31 @@
       const lastWeekKey = useMemo(() => getMapleWeekKey(Date.now() - (7 * 24 * 60 * 60 * 1000)), []);
 
       const handleRegisterAccount = async (targetId, targetPw) => {
-        if (!supabaseRef.current || !targetId || !targetPw) return false;
         setSyncStatus('계정 생성 중...');
         try {
-          const { data, error } = await supabaseRef.current
-            .from('maple_data')
-            .select('id')
-            .eq('id', targetId)
-            .single();
-
-          if (data) {
-            alert('이미 존재하는 동기화 ID입니다. 다른 ID를 사용하시거나 [로그인]을 이용해주세요.');
-            setSyncStatus('생성 실패 (ID 중복)');
-            return false;
-          }
-
           const payload = {
             characters,
             isMvpOrPc,
             weeklyHistory,
             updatedAt: new Date().toISOString()
           };
-          const { error: insertError } = await supabaseRef.current
-            .from('maple_data')
-            .insert({ id: targetId, password: targetPw, data: payload });
-
-          if (insertError) throw insertError;
-
+          await requestSyncApi('register', targetId, targetPw, payload);
           setSyncStatus('클라우드 연동됨');
           return true;
         } catch (err) {
           console.error(err);
-          setSyncStatus('생성 오류');
-          alert('계정 생성 중 오류가 발생했습니다.');
+          setSyncStatus('생성 실패');
+          alert(err.message || '계정 생성 중 오류가 발생했습니다.');
           return false;
         }
       };
 
       const handleLoginAccount = async (targetId, targetPw) => {
-        if (!supabaseRef.current || !targetId || !targetPw) return false;
         setSyncStatus('불러오는 중...');
         try {
-          const { data, error } = await supabaseRef.current
-            .from('maple_data')
-            .select('data, password')
-            .eq('id', targetId)
-            .single();
-
-          if (error && error.code === 'PGRST116') {
-            alert('존재하지 않는 동기화 ID입니다. 먼저 [계정 만들기]를 진행해주세요.');
-            setSyncStatus('로그인 실패 (ID 없음)');
-            return false;
-          }
-          if (error) throw error;
-
-          if (data.password && data.password !== targetPw) {
-            alert('비밀번호가 일치하지 않습니다!');
-            setSyncStatus('비밀번호 오류');
-            return false;
-          }
-
-          if (data.data) {
-            const parsed = data.data;
+          const res = await requestSyncApi('login', targetId, targetPw);
+          if (res.data) {
+            const parsed = res.data;
             if (parsed.characters) setCharacters(parsed.characters);
             if (parsed.weeklyHistory) setWeeklyHistory(parsed.weeklyHistory);
             if (typeof parsed.isMvpOrPc === 'boolean') {
@@ -304,12 +263,12 @@
               setDropTaxRate(parsed.isMvpOrPc ? 3 : 5);
             }
           }
-
           setSyncStatus('클라우드 연동됨');
           return true;
         } catch (err) {
           console.error(err);
-          setSyncStatus('동기화 오류');
+          setSyncStatus('로그인 실패');
+          alert(err.message || '로그인 중 오류가 발생했습니다.');
           return false;
         }
       };
@@ -325,33 +284,9 @@
         if (syncMode === 'delete') {
           if (!confirm(`[${idVal}] 계정을 클라우드에서 정말 영구히 삭제하시겠습니까?`)) return;
 
-          if (!supabaseRef.current) return;
           setSyncStatus('삭제 중...');
           try {
-            const { data, error } = await supabaseRef.current
-              .from('maple_data')
-              .select('password')
-              .eq('id', idVal)
-              .single();
-
-            if (error || !data) {
-              alert('존재하지 않는 동기화 ID입니다.');
-              setSyncStatus('삭제 실패');
-              return;
-            }
-
-            if (data.password !== pwVal) {
-              alert('비밀번호가 일치하지 않아 계정을 삭제할 수 없습니다!');
-              setSyncStatus('비밀번호 오류');
-              return;
-            }
-
-            const { error: deleteError } = await supabaseRef.current
-              .from('maple_data')
-              .delete()
-              .eq('id', idVal);
-
-            if (deleteError) throw deleteError;
+            await requestSyncApi('delete', idVal, pwVal);
 
             if (syncId === idVal) {
               localStorage.removeItem('maple_sync_id');
@@ -366,7 +301,7 @@
           } catch (err) {
             console.error(err);
             setSyncStatus('삭제 오류');
-            alert('계정 삭제 중 오류가 발생했습니다.');
+            alert(err.message || '계정 삭제 중 오류가 발생했습니다.');
           }
           return;
         }
@@ -389,7 +324,7 @@
       };
 
       useEffect(() => {
-        if (DEFAULT_SB_URL && DEFAULT_SB_KEY && syncId && syncPassword) {
+        if (syncId && syncPassword) {
           handleLoginAccount(syncId, syncPassword);
         }
       }, []);
@@ -404,7 +339,7 @@
         localStorage.setItem('maple_characters_v2', JSON.stringify(characters));
         localStorage.setItem('maple_weekly_history_v2', JSON.stringify(weeklyHistory));
 
-        if (!supabaseRef.current || !syncId || !syncPassword) return;
+        if (!syncId || !syncPassword) return;
 
         const timer = setTimeout(async () => {
           setSyncStatus('저장 중...');
@@ -415,11 +350,7 @@
               weeklyHistory,
               updatedAt: new Date().toISOString()
             };
-            const { error } = await supabaseRef.current
-              .from('maple_data')
-              .upsert({ id: syncId, password: syncPassword, data: payload });
-
-            if (error) throw error;
+            await requestSyncApi('save', syncId, syncPassword, payload);
             setSyncStatus('클라우드 연동됨');
           } catch (err) {
             console.error(err);
@@ -500,12 +431,7 @@
 
         try {
           const res = await fetch(
-            `${DEFAULT_SB_URL}/functions/v1/get-character?name=${encodeURIComponent(searchName.trim())}`,
-            {
-              headers: {
-                'apikey': DEFAULT_SB_KEY,
-              }
-            }
+            `${DEFAULT_SB_URL}/functions/v1/get-character?name=${encodeURIComponent(searchName.trim())}`
           );
 
           const data = await res.json();
@@ -1170,7 +1096,7 @@
             {/* 메인 레이아웃: 대시보드(최상단) -> [좌: 캐릭터 / 우: 보스목록] */}
             <div className="space-y-6">
 
-              {/* [1. 전체 계정 총 예상 수익 대시보드] - 모바일/PC 모두 항상 1순위 최상단 */}
+              {/* [1. 전체 계정 총 예상 수익 대시보드] */}
               <div className={`border rounded-2xl p-5 shadow-lg sticky top-2 z-20 backdrop-blur-md transition-colors ${
                 isDark ? 'bg-slate-900/95 border-slate-800' : 'bg-white/95 border-slate-200 shadow-md'
               }`}>
@@ -1236,10 +1162,10 @@
                 </div>
               </div>
 
-              {/* [2단 배치 영역: 모바일에서는 2. 캐릭터 목록 -> 3. 보스 목록 순서로, PC에서는 좌 4칸 : 우 8칸] */}
+              {/* [2단 배치: 모바일 세로 순차 / PC 좌 4칸 : 우 8칸] */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
-                {/* [2. 보유 캐릭터 목록] - PC에서는 좌측(4칸), 모바일에서는 대시보드 바로 아래(2번째) */}
+                {/* [2. 보유 캐릭터 목록] */}
                 <div className="lg:col-span-4 space-y-4">
                   <div className={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
                     <div className="text-xs font-extrabold mb-3 flex items-center justify-between">
@@ -1315,7 +1241,7 @@
                   </div>
                 </div>
 
-                {/* [3. 보스 체크리스트 및 득템 정산] - PC에서는 우측(8칸), 모바일에서는 캐릭터 목록 아래(3번째) */}
+                {/* [3. 보스 체크리스트 및 득템 정산] */}
                 <div className="lg:col-span-8 space-y-4">
 
                   {activeChar && (
@@ -1329,7 +1255,7 @@
                           )}
                           {mainTab === 'monthly' && (
                             <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>
-                              [{activeChar.name}] 월간 보스 클리어: <strong className={activeCharWeeklyCount > 12 ? 'text-purple-400 font-bold' : 'text-purple-400 font-bold'}>{activeCharMonthlyCount}</strong>개
+                              [{activeChar.name}] 월간 보스 클리어: <strong className="text-purple-400 font-bold">{activeCharMonthlyCount}</strong>개
                             </span>
                           )}
                           {mainTab === 'drop' && (
@@ -1836,7 +1762,7 @@
                       onClick={() => { setAddMode('manual'); setFormError(''); }}
                       className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-colors ${
                         addMode === 'manual'
-                          ? 'bg-sky-600 text-white shadow'
+                          ? 'bg-slate-800/70 text-slate-400'
                           : (isDark ? 'bg-slate-800/70 text-slate-400' : 'bg-slate-200/80 text-slate-600')
                       }`}
                     >
