@@ -185,6 +185,10 @@
       const [syncPassword, setSyncPassword] = useState(() => localStorage.getItem('maple_sync_pw') || '');
       const [showSyncModal, setShowSyncModal] = useState(false);
       const [showAddCharModal, setShowAddCharModal] = useState(false);
+
+      // 🔥 정중앙 알림 모달 상태 추가
+      const [alertModalMessage, setAlertModalMessage] = useState('');
+
       const [syncMode, setSyncMode] = useState('register');
       const [tempSyncId, setTempSyncId] = useState('');
       const [tempSyncPassword, setTempSyncPassword] = useState('');
@@ -245,7 +249,7 @@
         } catch (err) {
           console.error(err);
           setSyncStatus('생성 실패');
-          alert(err.message || '계정 생성 중 오류가 발생했습니다.');
+          setAlertModalMessage(err.message || '계정 생성 중 오류가 발생했습니다.');
           return false;
         }
       };
@@ -268,7 +272,7 @@
         } catch (err) {
           console.error(err);
           setSyncStatus('로그인 실패');
-          alert(err.message || '로그인 중 오류가 발생했습니다.');
+          setAlertModalMessage(err.message || '로그인 중 오류가 발생했습니다.');
           return false;
         }
       };
@@ -277,11 +281,13 @@
         const idVal = tempSyncId.trim();
         const pwVal = tempSyncPassword.trim();
         if (!idVal || !pwVal) {
-          alert('동기화 ID와 비밀번호를 모두 입력해주세요!');
+          setAlertModalMessage('동기화 ID와 비밀번호를 모두 입력해주세요!');
           return;
         }
 
         if (syncMode === 'delete') {
+          setAlertModalMessage(`[${idVal}] 계정을 클라우드에서 정말 영구히 삭제하시겠습니까?`);
+          // 삭제 컨펌은 확인 버튼이 있는 별도 로직이 필요하므로 단순 알림 대신 기존 confirm 유지하거나 모달 확장 가능
           if (!confirm(`[${idVal}] 계정을 클라우드에서 정말 영구히 삭제하시겠습니까?`)) return;
 
           setSyncStatus('삭제 중...');
@@ -297,11 +303,11 @@
 
             setSyncStatus('로컬 모드 (저장됨)');
             setShowSyncModal(false);
-            alert('클라우드 계정이 성공적으로 삭제되었습니다.');
+            setAlertModalMessage('클라우드 계정이 성공적으로 삭제되었습니다.');
           } catch (err) {
             console.error(err);
             setSyncStatus('삭제 오류');
-            alert(err.message || '계정 삭제 중 오류가 발생했습니다.');
+            setAlertModalMessage(err.message || '계정 삭제 중 오류가 발생했습니다.');
           }
           return;
         }
@@ -319,7 +325,7 @@
           setSyncId(idVal);
           setSyncPassword(pwVal);
           setShowSyncModal(false);
-          alert(syncMode === 'register' ? '계정이 성공적으로 생성되고 연동되었습니다!' : '기존 계정 데이터를 성공적으로 불러왔습니다!');
+          setAlertModalMessage(syncMode === 'register' ? '계정이 성공적으로 생성되고 연동되었습니다!' : '기존 계정 데이터를 성공적으로 불러왔습니다!');
         }
       };
 
@@ -381,7 +387,7 @@
           setActiveCharId('');
           setSyncId('');
           setSyncPassword('');
-          alert('모든 데이터가 초기화되었습니다.');
+          setAlertModalMessage('모든 데이터가 초기화되었습니다.');
           window.location.reload();
         }
       };
@@ -515,19 +521,32 @@
         }
       };
 
+      const bossMap = useMemo(() => Object.fromEntries(bossList.map(b => [b.id, b])), [bossList]);
+
+      // 🔥 주간 보스 12개 초과 선택 방지 로직 적용
       const selectBossDifficulty = (bossItem, diffVariantIds) => {
         if (!activeCharId) return;
 
         setCharacters(prev => prev.map(char => {
           if (char.id !== activeCharId) return char;
           const nextClears = { ...char.clears };
-          const isCurrentlySelected = Boolean(nextClears[bossItem.id]);
+
+          const existingVariantId = diffVariantIds.find(id => Boolean(nextClears[id]));
+          const isTogglingOff = existingVariantId === bossItem.id;
+
+          if (!existingVariantId && bossItem.cycle === 'weekly') {
+            const currentWeeklyCount = Object.keys(nextClears).filter(bId => bossMap[bId]?.cycle === 'weekly').length;
+            if (currentWeeklyCount >= 12) {
+              setAlertModalMessage('주간 보스는 캐릭터당 최대 12개까지만 선택할 수 있습니다.');
+              return char;
+            }
+          }
 
           diffVariantIds.forEach(id => {
             delete nextClears[id];
           });
 
-          if (!isCurrentlySelected) {
+          if (!isTogglingOff) {
             nextClears[bossItem.id] = 1;
           }
 
@@ -548,7 +567,7 @@
       const handleAddDrop = (e) => {
         e.preventDefault();
         if (!activeCharId) {
-          alert('득템을 등록할 캐릭터를 먼저 선택해주세요!');
+          setAlertModalMessage('득템을 등록할 캐릭터를 먼저 선택해주세요!');
           return;
         }
         const numericVal = parseInt(dropItemPriceRaw.replace(/[^0-9]/g, '') || '0', 10);
@@ -606,7 +625,6 @@
       const totalDropSumAll = allDrops.reduce((sum, d) => sum + d.price, 0);
 
       const calculation = useMemo(() => {
-        const bossMap = Object.fromEntries(bossList.map(b => [b.id, b]));
         const candidateWeeklyCrystals = [];
         let totalDropMesoWeekly = 0;
         let totalDropMesoMonthly = 0;
@@ -684,9 +702,7 @@
           },
           charWeeklyTotals
         };
-      }, [characters, bossList, allDrops]);
-
-      const bossMap = useMemo(() => Object.fromEntries(bossList.map(b => [b.id, b])), [bossList]);
+      }, [characters, bossList, allDrops, bossMap]);
 
       const getCharacterSummary = (char) => {
         let crystalWeeklyList = [];
@@ -749,7 +765,7 @@
 
       const handleCloneToLastWeekForTest = () => {
         if (calculation.weekly.crystalMeso <= 0) {
-          alert('먼저 보스를 1개 이상 체크한 후 눌러주세요!');
+          setAlertModalMessage('먼저 보스를 1개 이상 체크한 후 눌러주세요!');
           return;
         }
 
@@ -763,7 +779,7 @@
 
         setWeeklyHistory(nextHistory);
         localStorage.setItem('maple_weekly_history_v2', JSON.stringify(nextHistory));
-        alert(`현재 수익(${formatMeso(calculation.weekly.crystalMeso)})이 지난주(${lastWeekKey}) 기록으로 복제되었습니다!\n이제 보스 난이도를 올리거나 다른 보스를 체크하여 증감 배지를 확인해보세요.`);
+        setAlertModalMessage(`현재 수익(${formatMeso(calculation.weekly.crystalMeso)})이 지난주(${lastWeekKey}) 기록으로 복제되었습니다!`);
       };
 
       const lastWeekSnapshot = weeklyHistory[lastWeekKey];
@@ -817,7 +833,6 @@
 
       const themeContainer = isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900';
       const themeCard = isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
-      const themeCardSub = isDark ? 'bg-slate-900/60 border-slate-800/80' : 'bg-white/80 border-slate-200 shadow-sm';
       const themeInnerInput = isDark ? 'bg-slate-950 border-slate-800 text-white placeholder-slate-500' : 'bg-slate-100 border-slate-300 text-slate-900 placeholder-slate-400';
       const themeInnerBox = isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200';
 
@@ -1162,10 +1177,10 @@
                 </div>
               </div>
 
-              {/* [2단 배치: 모바일 세로 순차 / PC 좌 4칸 : 우 8칸] */}
+              {/* [2단 배치] */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
-                {/* [2. 보유 캐릭터 목록] */}
+                {/* [보유 캐릭터 목록] */}
                 <div className="lg:col-span-4 space-y-4">
                   <div className={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
                     <div className="text-xs font-extrabold mb-3 flex items-center justify-between">
@@ -1241,7 +1256,7 @@
                   </div>
                 </div>
 
-                {/* [3. 보스 체크리스트 및 득템 정산] */}
+                {/* [보스 체크리스트 및 득템 정산] */}
                 <div className="lg:col-span-8 space-y-4">
 
                   {activeChar && (
@@ -1250,7 +1265,10 @@
                         <div>
                           {mainTab === 'weekly' && (
                             <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>
-                              [{activeChar.name}] 주간 보스 클리어: <strong className={activeCharWeeklyCount > 12 ? 'text-rose-500 font-black' : 'text-sky-500 font-bold'}>{activeCharWeeklyCount}</strong> / 12개
+                              [{activeChar.name}] 주간 보스 클리어:&nbsp;
+                              <strong className={`font-black ${activeCharWeeklyCount === 12 ? 'text-amber-400' : 'text-sky-500'}`}>
+                                {activeCharWeeklyCount}
+                              </strong> / 12개 {activeCharWeeklyCount >= 12 && <span className="text-amber-400 font-bold">(선택 완료)</span>}
                             </span>
                           )}
                           {mainTab === 'monthly' && (
@@ -1310,7 +1328,7 @@
                       {mainTab !== 'drop' && (
                         <div className="flex items-center justify-between px-1 pt-1 text-xs">
                           <span className={`text-[11px] font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                            선택 캐릭터 보스 진행 현황
+                            {mainTab === 'weekly' ? '최대 12개 선택 가능 (난이도 변경/해제는 언제든 가능)' : '월간 보스는 주간 12개 제한과 무관'}
                           </span>
                           <button
                             type="button"
@@ -1722,6 +1740,32 @@
               </div>
             </div>
 
+            {/* 🔥 화면 정중앙 알림 모달 팝업 컴포넌트 */}
+            {alertModalMessage && (
+              <div
+                onClick={() => setAlertModalMessage('')}
+                className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50 animate-fadeIn"
+              >
+                <div
+                  onClick={e => e.stopPropagation()}
+                  className={`border rounded-2xl p-6 max-w-xs w-full shadow-2xl text-center relative ${themeCard}`}
+                >
+                  <div className="text-3xl mb-2">⚠️</div>
+                  <h3 className={`text-sm font-bold mb-2 ${isDark ? 'text-white' : 'text-slate-900'}`}>알림</h3>
+                  <p className={`text-xs mb-5 whitespace-pre-line leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                    {alertModalMessage}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setAlertModalMessage('')}
+                    className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs transition-colors shadow-sm"
+                  >
+                    확인
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* 캐릭터 추가 모달 */}
             {showAddCharModal && (
               <div
@@ -1762,7 +1806,7 @@
                       onClick={() => { setAddMode('manual'); setFormError(''); }}
                       className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition-colors ${
                         addMode === 'manual'
-                          ? 'bg-slate-800/70 text-slate-400'
+                          ? 'bg-sky-600 text-white shadow'
                           : (isDark ? 'bg-slate-800/70 text-slate-400' : 'bg-slate-200/80 text-slate-600')
                       }`}
                     >
@@ -1833,7 +1877,7 @@
               </div>
             )}
 
-            {/* 계정 연동 및 백업 모달 */}
+            {/* 계정 연동 모달 */}
             {showSyncModal && (
               <div
                 onClick={() => setShowSyncModal(false)}
