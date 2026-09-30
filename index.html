@@ -729,8 +729,8 @@
           if ((d.date || '').slice(0, 7) === currentYearMonth) charDropMonthly += d.price;
         });
 
-        const weeklyTotal = crystalWeekly + charDropWeekly;
-        const monthlyTotal = (crystalWeekly * 4) + crystalMonthly + charDropMonthly;
+        const weeklyTotal = crystalWeekly;
+        const monthlyTotal = (crystalWeekly * 4) + crystalMonthly;
 
         const lastCharMeso = lastWeekSnapshot?.chars?.[char.id];
         const diffWeekly = typeof lastCharMeso === 'number' ? crystalWeekly - lastCharMeso : 0;
