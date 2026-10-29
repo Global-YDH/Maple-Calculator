@@ -23,9 +23,14 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
+    // GitHub Pages 운영 사이트에서만 클라우드 동기화를 허용합니다.
+    // 사용자 지정 도메인을 사용하는 경우 운영 도메인을 아래 조건에 추가하세요.
+    const ENABLE_CLOUD_SYNC = window.location.hostname.endsWith('.github.io');
+
     const DEFAULT_SB_URL = 'https://pmudomjxhvmnvusfnqhn.supabase.co';
 
     async function requestSyncApi(action, id, password, data = null) {
+      if (!ENABLE_CLOUD_SYNC) throw new Error('로컬 테스트에서는 클라우드 동기화가 비활성화되어 있습니다.');
       const res = await fetch(`${DEFAULT_SB_URL}/functions/v1/sync-account`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -211,6 +216,18 @@
         return saved ? JSON.parse(saved) : [];
       });
       const [activeCharId, setActiveCharId] = useState('');
+      const [isReorderingCharacters, setIsReorderingCharacters] = useState(false);
+      const [refreshingCharacters, setRefreshingCharacters] = useState(false);
+      const [refreshReport, setRefreshReport] = useState(null);
+      const [showRefreshReport, setShowRefreshReport] = useState(false);
+      const [ocidCandidates, setOcidCandidates] = useState([]);
+      const [repairingOcid, setRepairingOcid] = useState(false);
+      const saveQueue = useRef(Promise.resolve());
+      const [cloudReady, setCloudReady] = useState(false);
+      const refreshInProgress = useRef(false);
+      const charactersRef = useRef(characters);
+      charactersRef.current = characters;
+
 
       const [weeklyHistory, setWeeklyHistory] = useState(() => {
         const saved = localStorage.getItem('maple_weekly_history_v2');
@@ -330,10 +347,148 @@
       };
 
       useEffect(() => {
-        if (syncId && syncPassword) {
-          handleLoginAccount(syncId, syncPassword);
-        }
+        let cancelled = false;
+        (async () => {
+          if (ENABLE_CLOUD_SYNC && syncId && syncPassword) await handleLoginAccount(syncId, syncPassword);
+          if (!cancelled) setCloudReady(true);
+        })();
+        return () => { cancelled = true; };
       }, []);
+
+      // 모든 클라우드 저장을 순서대로 실행해 이전 상태가 나중에 덮어쓰지 않도록 합니다.
+      const enqueueCloudSave = (payload) => {
+        const task = saveQueue.current.catch(() => {}).then(() => requestSyncApi('save', syncId, syncPassword, payload));
+        saveQueue.current = task;
+        return task;
+      };
+
+      const repairOcid = async (candidate) => {
+        if (repairingOcid || refreshingCharacters || !cloudReady) return;
+        const current = charactersRef.current;
+        const target = current.find(c => c.id === candidate.oldId && c.name === candidate.name);
+        if (!target || current.some(c => c.id === candidate.newId)) {
+          setAlertModalMessage('복구 대상이 변경되었거나 새 OCID가 이미 등록되어 있습니다. 다시 갱신해 주세요.');
+          setOcidCandidates(prev => prev.filter(c => c.oldId !== candidate.oldId));
+          return;
+        }
+        if (!window.confirm(`[${candidate.name}]의 OCID를 변경하시겠습니까?\n\n기존: ${candidate.oldId}\n신규: ${candidate.newId}\n\n닉네임이 같더라도 동일 캐릭터라는 보장은 없습니다. 본인 캐릭터인지 확인한 경우에만 승인해 주세요.\n보스 설정, 득템 기록, 주차별 기록은 유지됩니다.`)) return;
+        if (syncId && syncPassword && syncStatus !== '클라우드 연동됨') {
+          setAlertModalMessage('클라우드 연결 상태가 정상인지 확인한 뒤 다시 시도해 주세요.');
+          return;
+        }
+        setRepairingOcid(true);
+        try {
+          // 승인 시점에 새 OCID의 최신 데이터를 다시 검증합니다.
+          const response = await fetch(`${DEFAULT_SB_URL}/functions/v1/get-character?name=${encodeURIComponent(candidate.name)}`);
+          const data = await response.json();
+          if (!response.ok || data.ocid !== candidate.newId || data.name !== candidate.name || !data.job || !Number.isFinite(Number(data.level))) {
+            throw new Error('최신 캐릭터 정보가 일치하지 않아 복구를 중단했습니다.');
+          }
+          const updatedCharacters = current.map(char => char.id !== candidate.oldId ? char : {
+            ...char, id: candidate.newId, name: data.name, job: data.job,
+            level: data.level, image: data.image,
+            drops: (char.drops || []).map(drop => ({
+             ...drop, charId: drop.charId === candidate.oldId ? candidate.newId : drop.charId
+            }))
+          });
+          const updatedHistory = Object.fromEntries(Object.entries(weeklyHistory).map(([week, entry]) => {
+            if (!entry || !entry.chars || !Object.prototype.hasOwnProperty.call(entry.chars, candidate.oldId)) return [week, entry];
+            const chars = { ...entry.chars };
+            chars[candidate.newId] = chars[candidate.oldId];
+            delete chars[candidate.oldId];
+            return [week, { ...entry, chars }];
+          }));
+          if (syncId && syncPassword) {
+            setSyncStatus('저장 중...');
+            await enqueueCloudSave({ characters: updatedCharacters, isMvpOrPc, weeklyHistory: updatedHistory, updatedAt: new Date().toISOString() });
+            setSyncStatus('클라우드 연동됨');
+          }
+          setCharacters(updatedCharacters);
+          setWeeklyHistory(updatedHistory);
+          localStorage.setItem('maple_characters_v2', JSON.stringify(updatedCharacters));
+          localStorage.setItem('maple_weekly_history_v2', JSON.stringify(updatedHistory));
+          setActiveCharId(id => id === candidate.oldId ? candidate.newId : id);
+          setOcidCandidates(prev => prev.filter(c => c.oldId !== candidate.oldId));
+          setAlertModalMessage(`[${candidate.name}] OCID 복구가 완료되었습니다. 보스 설정과 득템 기록은 유지되었습니다.`);
+        } catch (err) {
+          setSyncStatus(syncId && syncPassword ? '저장 실패' : syncStatus);
+          setAlertModalMessage(`OCID 복구 실패: ${err.message || '알 수 없는 오류'}\n기존 데이터는 변경하지 않았습니다.`);
+        } finally { setRepairingOcid(false); }
+      };
+
+      const refreshCharacterInfo = async (onlyFailed = false, automatic = false) => {
+        if (refreshInProgress.current || !cloudReady) return;
+        const all = charactersRef.current;
+        const previousFailures = refreshReport?.failures || [];
+        const failureIds = new Set(previousFailures.map(item => item.id));
+        const targets = all.filter(c => c.id && !String(c.id).startsWith('custom_') && (!onlyFailed || failureIds.has(c.id)));
+        if (!targets.length) {
+          if (!automatic) setAlertModalMessage(onlyFailed ? '재시도할 캐릭터가 없습니다.' : 'API로 등록된 캐릭터가 없습니다.');
+          return;
+        }
+        refreshInProgress.current = true;
+        setRefreshingCharacters(true);
+        const failures = [];
+        const detectedCandidates = [];
+        const updates = new Map();
+        let successCount = 0;
+        try {
+          // 순차 요청으로 API 호출 폭주 방지. 실패해도 나머지 캐릭터 계속 처리.
+          for (const char of targets) {
+            try {
+              const res = await fetch(`${DEFAULT_SB_URL}/functions/v1/get-character?ocid=${encodeURIComponent(char.id)}`);
+              let data;
+              try { data = await res.json(); } catch (_) { throw new Error(`서버 응답을 해석할 수 없습니다. (HTTP ${res.status})`); }
+             if (!res.ok || !data.ocid || data.ocid !== char.id || !data.name) {
+               // 정상 캐릭터 데이터가 아닌 경우에만 닉네임으로 OCID 변경 후보를 찾습니다.
+               // 네트워크 장애나 인증 오류는 복구 후보로 만들지 않습니다.
+               const invalidData = (res.status === 502 && data.code === 'INVALID_CHARACTER_DATA') ||
+                 (res.ok && (!data.name || !data.ocid));
+               if (invalidData && char.name) {
+                 try {
+                  const lookupRes = await fetch(`${DEFAULT_SB_URL}/functions/v1/get-character?name=${encodeURIComponent(char.name)}`);
+                  const lookup = await lookupRes.json();
+                  if (lookupRes.ok && lookup.ocid && lookup.ocid !== char.id && lookup.name === char.name &&
+                      lookup.job && Number.isFinite(Number(lookup.level)) &&
+                      !all.some(c => c.id === lookup.ocid)) {
+                    detectedCandidates.push({ oldId: char.id, newId: lookup.ocid, name: char.name, job: lookup.job, level: lookup.level });
+                  }
+                 } catch (_) { /* 재조회 실패 시 기존 데이터 유지 */ }
+               }
+               throw new Error(data.error || `조회 실패 (HTTP ${res.status})`);
+             }
+              updates.set(char.id, { name: data.name, job: data.job, level: data.level, image: data.image });
+              successCount++;
+            } catch (err) {
+              failures.push({ id: char.id, name: char.name, reason: err.message || '알 수 없는 오류' });
+            }
+          }
+          if (updates.size) {
+            setCharacters(prev => prev.map(char => {
+              const info = updates.get(char.id);
+              return info ? { ...char, ...info } : char; // clears/drops 및 기타 설정 보존
+            }));
+          }
+          setOcidCandidates(prev => {
+            const ids = new Set(targets.map(c => c.id));
+            return [...prev.filter(c => !ids.has(c.oldId)), ...detectedCandidates];
+          });
+          const report = { success: successCount, total: targets.length, failures, at: new Date().toISOString() };
+          setRefreshReport(report);
+          if (failures.length) setShowRefreshReport(true);
+          if (!automatic) setShowRefreshReport(true);
+        } finally {
+          refreshInProgress.current = false;
+          setRefreshingCharacters(false);
+        }
+      };
+
+      useEffect(() => {
+        if (!ENABLE_CLOUD_SYNC || !cloudReady) return;
+        // 클라우드 로그인/데이터 불러오기가 끝난 뒤, 접속할 때마다 즉시 갱신합니다.
+        refreshCharacterInfo(false, true);
+      }, [cloudReady]);
+
 
       const isInitialMount = useRef(true);
       useEffect(() => {
@@ -345,7 +500,7 @@
         localStorage.setItem('maple_characters_v2', JSON.stringify(characters));
         localStorage.setItem('maple_weekly_history_v2', JSON.stringify(weeklyHistory));
 
-        if (!syncId || !syncPassword) return;
+        if (!ENABLE_CLOUD_SYNC || !syncId || !syncPassword || !cloudReady) return;
 
         const timer = setTimeout(async () => {
           setSyncStatus('저장 중...');
@@ -356,7 +511,7 @@
               weeklyHistory,
               updatedAt: new Date().toISOString()
             };
-            await requestSyncApi('save', syncId, syncPassword, payload);
+            await enqueueCloudSave(payload);
             setSyncStatus('클라우드 연동됨');
           } catch (err) {
             console.error(err);
@@ -365,7 +520,7 @@
         }, 1000);
 
         return () => clearTimeout(timer);
-      }, [characters, isMvpOrPc, weeklyHistory]);
+      }, [characters, isMvpOrPc, weeklyHistory, cloudReady]);
 
       const toggleMvpBenefit = (checked) => {
         setIsMvpOrPc(checked);
@@ -501,6 +656,19 @@
         setManualLevel('');
         setFormError('');
         setShowAddCharModal(false);
+      };
+
+      // 캐릭터 배열 순서만 변경하며 clears, drops, OCID 등 내부 데이터는 그대로 보존합니다.
+      const moveCharacter = (id, direction) => {
+        if (!cloudReady || refreshingCharacters || repairingOcid) return;
+        setCharacters(prev => {
+          const index = prev.findIndex(c => c.id === id);
+          const nextIndex = index + direction;
+          if (index < 0 || nextIndex < 0 || nextIndex >= prev.length) return prev;
+          const next = [...prev];
+          [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+          return next;
+        });
       };
 
       const deleteCharacter = (id) => {
@@ -1182,72 +1350,101 @@
 
                 {/* [보유 캐릭터 목록] */}
                 <div className="lg:col-span-4 space-y-4">
-                  <div className={`border rounded-2xl p-4 transition-colors ${themeCard}`}>
-                    <div className="text-xs font-extrabold mb-3 flex items-center justify-between">
-                      <span className={isDark ? 'text-slate-300' : 'text-slate-700'}>보유 캐릭터 목록 ({characters.length})</span>
-                      <button
-                        type="button"
-                        onClick={() => { setAddMode('api'); setFormError(''); setShowAddCharModal(true); }}
-                        className="text-xs px-2.5 py-1 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold transition-all shadow-sm whitespace-nowrap"
-                      >
-                        + 캐릭터 추가
-                      </button>
+                  <div className={`border rounded-2xl p-3 sm:p-4 transition-colors ${themeCard}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                      <span className={`text-xs font-extrabold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                        보유 캐릭터 목록 ({characters.length})
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button type="button" disabled={refreshingCharacters || !cloudReady || isReorderingCharacters}
+                          onClick={() => refreshCharacterInfo(false, false)}
+                          className="text-[11px] px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold">
+                          {refreshingCharacters ? '갱신 중...' : '↻ 갱신'}
+                        </button>
+                        <button type="button" disabled={!cloudReady || refreshingCharacters || repairingOcid}
+                          onClick={() => setIsReorderingCharacters(v => !v)}
+                          className={`text-[11px] px-2 py-1.5 rounded-lg font-bold disabled:opacity-50 ${isReorderingCharacters ? 'bg-sky-600 text-white' : (isDark ? 'bg-slate-700 text-slate-200' : 'bg-slate-200 text-slate-700')}`}>
+                          {isReorderingCharacters ? '✓ 편집 완료' : '캐릭터 편집'}
+                        </button>
+                        <button type="button" disabled={isReorderingCharacters}
+                          onClick={() => { setAddMode('api'); setFormError(''); setShowAddCharModal(true); }}
+                          className="text-[11px] px-2 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold">
+                          + 추가
+                        </button>
+                      </div>
                     </div>
-
+                    {refreshReport && (
+                      <div className="mb-3 text-[11px] flex flex-wrap items-center justify-between gap-2">
+                        <span className={refreshReport.failures.length ? 'text-amber-500' : 'text-emerald-500'}>
+                          최근 갱신: 성공 {refreshReport.success}명 / 실패 {refreshReport.failures.length}명
+                        </span>
+                        <button type="button" onClick={() => setShowRefreshReport(true)} className="text-sky-500 underline">상세 결과</button>
+                      </div>
+                    )}
+                    {isReorderingCharacters && (
+                      <div className={`mb-3 text-[11px] rounded-lg px-3 py-2 ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                        화살표로 순서를 바꾸고 '편집 완료'를 누르세요. 순서는 자동 저장됩니다.
+                      </div>
+                    )}
                     {characters.length === 0 ? (
                       <div className={`text-center py-6 text-xs border border-dashed rounded-xl ${isDark ? 'text-slate-500 border-slate-800' : 'text-slate-400 border-slate-300'}`}>
                         등록된 캐릭터가 없습니다.
                       </div>
                     ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2.5 max-h-[500px] overflow-y-auto pr-1 no-scrollbar">
-                        {characters.map(c => {
+                      <div className="grid grid-cols-2 gap-2 sm:gap-3 max-h-[650px] overflow-y-auto pr-0.5 sm:pr-1 no-scrollbar">
+                        {characters.map((c, index) => {
                           const summary = getCharacterSummary(c);
                           const isSelected = activeCharId === c.id;
                           const charDisplayTotal = incomePeriod === 'weekly' ? summary.weeklyTotal : summary.monthlyTotal;
                           const charDiff = incomePeriod === 'weekly' ? summary.diffWeekly : summary.diffWeekly * 4;
-
                           return (
-                            <div
-                              key={c.id}
-                              onClick={() => setActiveCharId(c.id)}
-                              className={`w-full p-3 rounded-xl transition-all border cursor-pointer relative flex flex-col justify-between gap-2 ${
+                            <div key={c.id}
+                              role={isReorderingCharacters ? undefined : 'button'}
+                              tabIndex={isReorderingCharacters ? -1 : 0}
+                              onKeyDown={e => { if (!isReorderingCharacters && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setActiveCharId(c.id); } }}
+                              onClick={() => { if (!isReorderingCharacters) setActiveCharId(c.id); }}
+                              className={`min-w-0 rounded-xl border overflow-hidden transition-all ${isReorderingCharacters ? '' : 'cursor-pointer'} ${
                                 isSelected
-                                  ? (isDark ? 'bg-sky-950/80 border-sky-500 text-white shadow-sm' : 'bg-sky-50 border-sky-500 text-sky-900 shadow-sm font-bold')
-                                  : (isDark ? 'bg-slate-900/50 border-slate-800 text-slate-400 hover:bg-slate-800/60' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100')
+                                  ? (isDark ? 'bg-sky-950/60 border-sky-500 shadow-sm' : 'bg-sky-50 border-sky-500 shadow-sm')
+                                  : (isDark ? 'bg-slate-900/70 border-slate-800 hover:border-slate-600' : 'bg-white border-slate-200 hover:border-slate-400')
                               }`}
                             >
-                              <div className="flex items-center gap-2.5 truncate w-full pr-6">
+                              <div className="relative flex items-center justify-center h-[88px] sm:h-24 overflow-hidden"
+                                style={{ background: isDark ? 'radial-gradient(ellipse at center, #263c55 0%, #121c2e 75%)' : 'radial-gradient(ellipse at center, #dbeafe 0%, #f1f5f9 75%)' }}>
                                 {c.image ? (
-                                  <img src={c.image} alt="" className="w-9 h-9 rounded-full bg-slate-800 object-cover shrink-0" />
+                                  <img src={c.image} alt={`${c.name} 캐릭터 코디`} loading="lazy"
+                                    className="h-full w-full object-contain drop-shadow-lg"
+                                    style={{ imageRendering: 'auto', transform: 'scale(1.6)', transformOrigin: 'center center' }} />
                                 ) : (
-                                  <div className="w-9 h-9 rounded-full bg-sky-600 border border-sky-400 flex items-center justify-center text-xs text-white font-bold shrink-0">
+                                  <div className="w-14 h-14 rounded-full bg-sky-600/30 border border-sky-500/40 flex items-center justify-center text-xl font-bold text-sky-400">
                                     {c.name.slice(0, 1)}
                                   </div>
                                 )}
-                                <div className="truncate">
-                                  <div className="font-bold text-xs sm:text-sm truncate">{c.name}</div>
-                                  <div className="text-[10px] opacity-70">Lv.{c.level}</div>
+                                {isSelected && !isReorderingCharacters && (
+                                  <span className="absolute top-1.5 left-1.5 text-[10px] font-bold rounded-md bg-sky-500 text-white px-1.5 py-0.5">선택됨</span>
+                                )}
+                                {isReorderingCharacters && (
+                                  <div className="absolute inset-x-1 bottom-1 flex justify-center gap-1">
+                                    <button type="button" disabled={index === 0} onClick={e => { e.stopPropagation(); moveCharacter(c.id, -1); }}
+                                      className="bg-slate-950/90 border border-slate-600 text-white rounded-lg px-3 py-1.5 disabled:opacity-30" title="위로 이동">↑</button>
+                                    <button type="button" disabled={index === characters.length - 1} onClick={e => { e.stopPropagation(); moveCharacter(c.id, 1); }}
+                                      className="bg-slate-950/90 border border-slate-600 text-white rounded-lg px-3 py-1.5 disabled:opacity-30" title="아래로 이동">↓</button>
+                                    <button type="button" onClick={e => { e.stopPropagation(); deleteCharacter(c.id); }}
+                                      className="bg-rose-950/90 border border-rose-700 text-rose-300 rounded-lg px-2 py-1.5" title="캐릭터 삭제">✕</button>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="px-1.5 sm:px-2 py-1.5 text-center min-w-0">
+                                <div className={`text-xs sm:text-sm font-extrabold truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}`} title={c.name}>{c.name}</div>
+                                <div className={`text-[10px] truncate mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`} title={`${c.job || ''} · Lv.${c.level}`}>
+                                  {c.job ? `${c.job} · ` : ''}Lv.{c.level}
+                                </div>
+                                <div className="mt-1 pt-1 border-t border-slate-500/20">
+                                  <div className={`text-[9px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>{incomePeriod === 'weekly' ? '주간 예상 수익' : '월간 예상 수익'}</div>
+                                  <div className="text-[11px] sm:text-xs font-black text-sky-500 leading-snug break-words [overflow-wrap:anywhere]" title={formatMeso(charDisplayTotal)}>{formatMeso(charDisplayTotal)}</div>
+                                  <div className="flex justify-center"><DiffBadge diff={charDiff} /></div>
                                 </div>
                               </div>
-
-                              <div className="w-full flex items-center justify-between pt-2 border-t border-slate-800/10">
-                                <span className="text-xs sm:text-sm font-black text-sky-500 whitespace-nowrap">
-                                  {formatMeso(charDisplayTotal)}
-                                </span>
-                                <DiffBadge diff={charDiff} />
-                              </div>
-
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteCharacter(c.id);
-                                }}
-                                className="absolute top-2.5 right-2.5 text-rose-400 hover:text-rose-300 p-1 rounded-md hover:bg-rose-500/25 transition-colors"
-                                title="캐릭터 삭제"
-                              >
-                                ✕
-                              </button>
                             </div>
                           );
                         })}
@@ -1741,6 +1938,47 @@
             </div>
 
             {/* 🔥 화면 정중앙 알림 모달 팝업 컴포넌트 */}
+            {showRefreshReport && refreshReport && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4" onClick={() => setShowRefreshReport(false)}>
+                <div className={`w-full max-w-md rounded-2xl p-5 shadow-2xl border ${isDark ? 'bg-slate-900 text-white border-slate-700' : 'bg-white text-slate-900 border-slate-200'}`} onClick={e => e.stopPropagation()}>
+                  <h3 className="font-extrabold text-base mb-3">캐릭터 정보 갱신 결과</h3>
+                  <p className="text-sm mb-3">성공 {refreshReport.success}명 · 실패 {refreshReport.failures.length}명 / 총 {refreshReport.total}명</p>
+                  {refreshReport.failures.length ? (
+                    <div className="max-h-60 overflow-y-auto space-y-2 mb-4">
+                      {refreshReport.failures.map(item => (
+                        <div key={item.id} className="rounded-lg border border-rose-500/30 p-2 text-xs">
+                          <div className="font-bold text-rose-400">{item.name}</div>
+                          <div className="mt-1 opacity-80 break-words">{item.reason}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="text-xs text-emerald-500 mb-4">모든 캐릭터가 정상 갱신되었습니다.</p>}
+                  {ocidCandidates.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                   <p className="text-xs font-bold text-amber-500">OCID 변경 가능성이 발견되었습니다. 본인 캐릭터인지 확인 후 복구하세요.</p>
+                   {ocidCandidates.map(candidate => (
+                     <div key={candidate.oldId} className="rounded-lg border border-amber-500/40 p-3 text-xs space-y-1">
+                       <div className="font-bold">{candidate.name} · {candidate.job} · Lv.{candidate.level}</div>
+                       <div className="break-all opacity-80">기존: {candidate.oldId}</div>
+                       <div className="break-all opacity-80">신규: {candidate.newId}</div>
+                       <button type="button" disabled={repairingOcid || refreshingCharacters}
+                        onClick={() => repairOcid(candidate)}
+                        className="mt-2 rounded-lg bg-amber-600 px-3 py-2 font-bold text-white disabled:opacity-50">
+                        {repairingOcid ? '복구 중...' : '확인 후 OCID 복구'}
+                       </button>
+                     </div>
+                   ))}
+                  </div>
+                )}
+                <div className="flex justify-end gap-2">
+                  {refreshReport.failures.length > 0 && (
+                      <button type="button" disabled={refreshingCharacters} onClick={() => { setShowRefreshReport(false); refreshCharacterInfo(true, false); }} className="rounded-lg px-3 py-2 bg-emerald-600 text-white text-xs font-bold disabled:opacity-50">실패 캐릭터 재시도</button>
+                    )}
+                    <button type="button" onClick={() => setShowRefreshReport(false)} className="rounded-lg px-3 py-2 bg-sky-600 text-white text-xs font-bold">닫기</button>
+                  </div>
+                </div>
+              </div>
+            )}
             {alertModalMessage && (
               <div
                 onClick={() => setAlertModalMessage('')}
