@@ -1373,12 +1373,18 @@
                         </button>
                       </div>
                     </div>
-                    {refreshReport && (
-                      <div className="mb-3 text-[11px] flex flex-wrap items-center justify-between gap-2">
-                        <span className={refreshReport.failures.length ? 'text-amber-500' : 'text-emerald-500'}>
-                          최근 갱신: 성공 {refreshReport.success}명 / 실패 {refreshReport.failures.length}명
+                    {refreshReport && refreshReport.failures.length > 0 && (
+                      <div className="mb-3 text-[11px] flex items-center gap-2">
+                        <span className="text-amber-500">
+                          갱신 실패 {refreshReport.failures.length}명
                         </span>
-                        <button type="button" onClick={() => setShowRefreshReport(true)} className="text-sky-500 underline">상세 결과</button>
+                        <button
+                          type="button"
+                          onClick={() => setShowRefreshReport(true)}
+                          className="text-sky-500 underline"
+                        >
+                          상세 결과
+                        </button>
                       </div>
                     )}
                     {isReorderingCharacters && (
